@@ -1,0 +1,11 @@
+*.pyc
+*.pyo
+.DS_Store
+build
+dist
+tmp
+MANIFEST
+*.swp
+build.conf
+.env
+lua_sandbox.egg-info

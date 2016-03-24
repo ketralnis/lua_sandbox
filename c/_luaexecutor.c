@@ -86,8 +86,9 @@ void time_limiting_hook(lua_State *L, lua_Debug *ar) {
     }
 }
 
-int encode_python_to_lua(lua_State* L, PyObject* value, int recursion) {
-    if(recursion > 10) {
+int encode_python_to_lua(lua_State* L, PyObject* value,
+                         int recursion, int max_recursion) {
+    if(recursion > max_recursion) {
         PyErr_SetString(PyExc_RuntimeError, "encode_python_to_lua recursed too far");
         return 0;
 
@@ -179,11 +180,11 @@ int encode_python_to_lua(lua_State* L, PyObject* value, int recursion) {
              * top of the stack.
              */
 
-            if(!encode_python_to_lua(L, dkey, recursion+1)) {
+            if(!encode_python_to_lua(L, dkey, recursion+1, max_recursion)) {
                 lua_pop(L, 1); // remove the table
                 return 0;
             }
-            if(!encode_python_to_lua(L, dvalue, recursion+1)) {
+            if(!encode_python_to_lua(L, dvalue, recursion+1, max_recursion)) {
                 lua_pop(L, 2); // remove the table and the key
                 return 0;
             }
@@ -251,7 +252,7 @@ cleanup:
 }
 
 
-int serialize_python_to_lua(lua_State* L, PyObject* env) {
+int serialize_python_to_lua(lua_State* L, PyObject* env, int max_recursion) {
     /*
      * take a lua_State and a Python Dict and encode that dict into global
      * variables in Lua. If this fails, it may leave the Lua stack in a bad way,
@@ -275,7 +276,7 @@ int serialize_python_to_lua(lua_State* L, PyObject* env) {
             return 0;
         }
 
-        if(!encode_python_to_lua(L, value, 0)) {
+        if(!encode_python_to_lua(L, value, 0, max_recursion)) {
             /* will have an exception on the python stack */
             return 0;
         }
@@ -287,7 +288,8 @@ int serialize_python_to_lua(lua_State* L, PyObject* env) {
     return 1;
 }
 
-PyObject* serialize_lua_to_python(lua_State* L, int idx, int recursion) {
+PyObject* serialize_lua_to_python(lua_State* L, int idx,
+                                  int recursion, int max_recursion) {
     /*
      * like serialize_python_to_lua, we can leave the Lua stack in a bad way,
      * but we declare this to be okay because we'll destroy it anyway. however,
@@ -305,7 +307,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx, int recursion) {
     /* convert to absolute index because we'll mess with the stack */
     idx = abs_index(L, idx);
 
-    if(recursion > 10) {
+    if(recursion > max_recursion) {
         PyErr_SetString(PyExc_RuntimeError, "serialize_lua_to_python recursed too far");
         return NULL;
     }
@@ -357,13 +359,15 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx, int recursion) {
 
         while (lua_next(L, table_index) != 0) {
             /* `key' is at index -2 and `value' at index -1 */
-            PyObject* key = serialize_lua_to_python(L, -2, recursion+1);
+            PyObject* key = serialize_lua_to_python(L, -2,
+                                                    recursion+1, max_recursion);
             if(key == NULL) {
                 Py_DECREF(ret);
                 return NULL;
             }
 
-            PyObject* value = serialize_lua_to_python(L, -1, recursion+1);
+            PyObject* value = serialize_lua_to_python(L, -1,
+                                                      recursion+1, max_recursion);
             if(value == NULL) {
                 Py_DECREF(key);
                 Py_DECREF(ret);
@@ -399,20 +403,37 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx, int recursion) {
 static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwargs) {
     int ret = 0;
 
-    static char *kwdlist[] = {NULL};
+    /*
+     * the libraries require about 100k to run on their own. The default gives
+     * them that plus some breathing room
+     */
+    Py_ssize_t max_lua_allocation = 2*1024*1024;
+    /*
+     * this is about one second on my laptop. TODO investigate what it would
+     * take to make this into seconds instead of cycles
+     */
+    unsigned long long max_lua_cycles = 500000;
+    /*
+     * max depth of serialisation/deserialisation
+     */
+    unsigned long max_lua_depth = 10;
+
+    static char *kwdlist[] = {"max_memory", "max_cycles", "max_object_depth"};
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                     "",
-                                     kwdlist)) {
-        // we take no arguments because our superclass is expected to handle
-        // them
+                                     "|nKk",
+                                     kwdlist,
+                                     &max_lua_allocation,
+                                     &max_lua_cycles,
+                                     &max_lua_depth)) {
         return -1;
     }
 
     int have_lock = 0;
 
     self->memory_used = 0;
-    self->memory_limit = MAX_LUA_ALLOCATION;
+    self->memory_limit = max_lua_allocation;
+    self->max_recursion = max_lua_depth;
 
     lua_State *L = NULL;
 
@@ -452,7 +473,7 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwarg
     luaL_openlibs(L);
 
     /* install our time-limiting hook */
-    lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, MAX_LUA_EXECUTION_HZ);
+    lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, max_lua_cycles);
 
     /*
      * add a pointer back to the _LuaExecutor object within the lua_State.
@@ -521,7 +542,7 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
     }
 
     /* if we got an environment to pass in, translate it from Python to Lua */
-    if(PyDict_Size(env)>=0 && !serialize_python_to_lua(L, env)) {
+    if(PyDict_Size(env)>=0 && !serialize_python_to_lua(L, env, self->max_recursion)) {
         /* there will be an error on the Python stack */
         goto done;
     }
@@ -601,7 +622,8 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
 
     for(int i=0; i<results_returned; i++) {
         int stacknum = stack_top_before+i;
-        PyObject* thisresult = serialize_lua_to_python(L, stacknum, 0);
+        PyObject* thisresult = serialize_lua_to_python(L, stacknum,
+                                                       0, self->max_recursion);
         if(thisresult==NULL) {
             goto error;
         }

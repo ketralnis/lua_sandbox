@@ -16,13 +16,9 @@ class SandboxedExecutor(LuaExecutor):
                                      'desc': desc})
 
 
-class SimpleSandboxedExecutor(LuaExecutor):
+class SimpleSandboxedExecutor(SandboxedExecutor):
     sandboxer = datafile('lua_utils/safe_sandbox.lua')
 
     def execute(self, program, env=None, desc=None):
-        libs = list_to_table([program])
-        return _LuaExecutor.execute(self,
-                                    self.sandboxer,
-                                    {'code': libs,
-                                     'env': env,
-                                     'desc': desc})
+        sup = super(SimpleSandboxedExecutor, self)
+        return sup.execute(self.sandboxer, program, env=env, desc=desc)

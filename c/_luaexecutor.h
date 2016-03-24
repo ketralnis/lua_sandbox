@@ -8,14 +8,6 @@
 
 #include <lua.h>
 
-/*
- * the libraries require about 100k to run on their own, give them that plus
- * some breathing room
- */
-const size_t MAX_LUA_ALLOCATION=2*1024*1024;
-const int MAX_LUA_EXECUTION_HZ=500000;
-const int MAX_LUA_DEPTH=10;
-
 static const char* EXECUTOR_LUA_REGISTRY_KEY = "_LuaExecutor";
 
 typedef struct {
@@ -35,8 +27,10 @@ typedef struct {
     struct timeval script_started;
 
     /* for the custom allocator */
-    size_t memory_limit;
-    size_t memory_used;
+    Py_ssize_t memory_limit;
+    Py_ssize_t memory_used;
+
+    int max_recursion;
 
 } _LuaExecutor;
 

@@ -204,7 +204,7 @@ class TestSafeguards(TestLuaExecution):
 
     def test_no_regex(self):
         # there are some regex operations you can do that are super slow, so we
-        # block regexes entirely
+        # block regexes entirely in the SimpleSandboxingExecutor
         program = """
             return string.find(("a"):rep(1e4), ".-.-.-.-b$")
         """

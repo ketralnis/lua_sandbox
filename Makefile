@@ -16,6 +16,12 @@ ${INSTALLEDENV}: setup.py
 	virtualenv .env
 	make rebuild
 
+dist: ${INSTALLEDENV}
+	.env/bin/python ./setup.py dist
+
+sdist: ${INSTALLEDENV}
+	.env/bin/python ./setup.py sdist
+
 rebuild:
 	.env/bin/python ./setup.py develop
 	touch ${INSTALLEDENV}

@@ -13,7 +13,7 @@ check_dependencies:
 ${INSTALLEDENV}: setup.py
 	make check_dependencies
 	rm -fr .env
-	virtualenv .env
+	virtualenv-2.7 .env
 	make rebuild
 
 dist: ${INSTALLEDENV}
@@ -26,8 +26,11 @@ rebuild:
 	.env/bin/python ./setup.py develop
 	touch ${INSTALLEDENV}
 
-test tests: ${INSTALLEDENV}
-	.env/bin/python -m lua_sandbox.tests.tests
+test: ${INSTALLEDENV}
+	.env/bin/python -m lua_sandbox.tests.tests ${TEST}
+
+gtest: ${INSTALLEDENV}
+	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}
 
 clean:
 	find lua_sandbox -type f -name \*.pyc -delete -print

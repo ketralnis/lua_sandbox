@@ -9,6 +9,18 @@
 #include <lua.h>
 
 static const char* EXECUTOR_LUA_REGISTRY_KEY = "_LuaExecutor";
+static const char* EXECUTOR_LUA_FUNCTION_MT_KEY = "_LuaExecutor.call_py_fn";
+
+// seriously?
+#ifndef TRUE
+#define TRUE 1
+#endif
+#ifndef FALSE
+#define FALSE 0
+#endif
+#ifndef BOOL
+#define BOOL unsigned char
+#endif
 
 typedef struct {
     PyObject_HEAD
@@ -21,6 +33,7 @@ typedef struct {
      * lua doesn't lock itself, so we're expected to do that. The rule that we
      * follow is that we must lock this any time that we release the GIL but
      * want to use the lua_State
+     * TODO change this to just always get this lock, even if we hold the GIL
      */
     pthread_mutex_t l_mutex;
 
@@ -30,16 +43,36 @@ typedef struct {
     Py_ssize_t memory_limit;
     Py_ssize_t memory_used;
 
+    /* we turn off Lua allocation limits during certain critical sections
+     * because Lua's error "handling" uses setjmp/longjmp which can prevent us
+     * from cleaning up our resources. fortunately the only place this isn't
+     * safe to do is during serialisation/deserialisation, so we can be
+     * reasonably sure that if the Lua VM goes over its allocation limit that
+     * it's because we passed them too much data in the first place. so in
+     * general we can turn off allocation checking unless we are running user
+     * code
+     */
+    BOOL limit_allocation;
+
+    unsigned long long max_lua_runtime;
     int max_recursion;
 
 } _LuaExecutor;
 
 /* prototypes */
+static void stackDump (lua_State *L);
+static int call_python_function_from_lua(lua_State *L);
+static int free_python_function(lua_State *L);
 static void format_python_exception(PyObject* exc_type, const char *fmt, ...);
 static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwds);
 static void _LuaExecutor_dealloc(_LuaExecutor* self);
 static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args);
 static PyObject* _LuaExecutor__stack_top(_LuaExecutor* self);
+PyObject* serialize_lua_to_python_multi(lua_State* L,
+                                        int start_idx, int count,
+                                        int max_recursion);
+PyObject* serialize_lua_to_python(lua_State* L, int idx,
+                                  int recursion, int max_recursion);
 
 /* the method table */
 static PyMethodDef _LuaExecutorType_methods[] = {

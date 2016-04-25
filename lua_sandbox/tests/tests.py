@@ -51,7 +51,8 @@ class TestLuaExecution(unittest.TestCase):
             1: 2,
             2: 3,
             4: "abc",
-            # 5: ['a', 'b', 'c'], # TODO
+            5: ('a', 'b', 'c'),
+            5.5: ['a', 'b', 'c'],
             6: 6.5,
             7: None,
             8: '',
@@ -63,7 +64,8 @@ class TestLuaExecution(unittest.TestCase):
             1.0: 2.0,
             2.0: 3.0,
             4.0: "abc",
-            # 5.0: {1.0: 'a', 2.0: 'b', 3.0: 'c'},
+            5.0: {1.0: 'a', 2.0: 'b', 3.0: 'c'},
+            5.5: {1.0: 'a', 2.0: 'b', 3.0: 'c'},
             6.0: 6.5,
             # 7 disappears
             8.0: '',
@@ -105,6 +107,34 @@ class TestLuaExecution(unittest.TestCase):
             d['foo'] = d
             self.ex.execute(program, {'foo': d})
         self.assertEqual(self.ex._stack_top(), 0)
+
+    def test_function_passing(self):
+        closed = []
+        def closure(argument1, argument2):
+            closed.append(argument1)
+            closed.append(argument2)
+            return argument1 ** argument2, argument2 ** argument1
+
+        program = """
+            a = 1+3
+            return foo(2, 3)
+        """
+        self.assertEqual(self.ex._stack_top(), 0)
+        ret = self.ex.execute(program, {'foo': closure})
+        self.assertEqual(self.ex._stack_top(), 0)
+
+        self.assertEqual(({1.0: 8.0, 2.0: 9.0},), ret)
+        self.assertEqual([2.0, 3.0], closed)
+
+    def test_pyfunction_exception(self):
+        program = """
+            a = 1+3
+            return foo(2, 3)
+        """
+        def bad_closure(x):
+            raise Exception("nuh uh")
+        with self.assertRaises(RuntimeError):
+            self.ex.execute(program, {'foo': bad_closure})
 
     def test_no_weird_lua_types(self):
         def _tester(program, args={}):

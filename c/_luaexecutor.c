@@ -46,7 +46,8 @@ void* l_alloc_restricted (void *ud, void *ptr, size_t osize, size_t nsize) {
         return NULL;
     }
 
-    if (self->memory_used + (nsize - osize) > self->memory_limit) {
+    if (self->limit_allocation
+        && self->memory_used + (nsize - osize) > self->memory_limit) {
         /* too much memory in use */
         return NULL;
     }
@@ -80,14 +81,19 @@ void time_limiting_hook(lua_State *L, lua_Debug *ar) {
     time_t diff = ((end.tv_usec+1000000*end.tv_sec)
                    - (self->script_started.tv_usec+1000000*self->script_started.tv_sec));
 
-    if(diff >= 1000*1000) {
+    if(self->max_lua_runtime != 0 && diff >= self->max_lua_runtime) {
         lua_pushstring(L, "time quota exceeded");
         lua_error(L);
+        return;
     }
 }
 
 int encode_python_to_lua(lua_State* L, PyObject* value,
                          int recursion, int max_recursion) {
+    /*
+     * On error, sets a Python exception and returns 0
+     */
+
     if(recursion > max_recursion) {
         PyErr_SetString(PyExc_RuntimeError, "encode_python_to_lua recursed too far");
         return 0;
@@ -151,6 +157,39 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
         }
 #endif
 
+    } else if(PyTuple_CheckExact(value) || PyList_CheckExact(value)) {
+        Py_ssize_t len = PySequence_Length(value);
+
+        if(len == -1) {
+            return 0;
+        }
+
+        lua_newtable(L);
+
+        for(int i=0; i<len; i++) {
+            PyObject *lvalue = PySequence_GetItem(value, i);
+
+            if(lvalue == NULL) {
+                lua_pop(L, 1); // the table
+                return 0;
+            }
+
+            // the key
+            lua_pushnumber(L, i+1);
+
+            // the value
+            if(!encode_python_to_lua(L, lvalue, recursion+1, max_recursion)) {
+                Py_DECREF(lvalue);
+                lua_pop(L, 2); // the key and table
+                return 0;
+            }
+
+            Py_DECREF(lvalue);
+
+            /* lua will pop off the key and value now, leaving only the table */
+            lua_settable(L, -3);
+        }
+
     } else if(PyDict_Check(value)) {
         lua_newtable(L);
 
@@ -193,6 +232,35 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
             lua_settable(L, -3);
         }
 
+    } else if(PyFunction_Check(value)) {
+        // we implement functions as userdatas with contents of the pointer to
+        // the PyObject* that have a metatable with __call and __gc, set up in
+        // _LuaExecutor_init
+
+        // put the userdata on the stack
+        PyObject** value_userdata = (PyObject**)lua_newuserdata(L, sizeof(value));
+
+        if(value_userdata==NULL) {
+            // n.b. this won't happen because lua_newuserdata is one of those
+            // lua functions that fails incorrectly, and we should only be in
+            // here with allocation limits disabled anyway
+
+            PyErr_Format(PyExc_RuntimeError,
+                         "reached lua memory limit");
+
+            return 0;
+        }
+        *value_userdata = value;
+
+        // assign its metatable to the one we set up on init
+        luaL_getmetatable(L, EXECUTOR_LUA_FUNCTION_MT_KEY);
+        lua_setmetatable(L, -2);
+
+        // retain it (free_python_function will free it from __gc)
+        Py_INCREF(value);
+
+        // and leave it on the Lua stack
+
     } else {
         format_python_exception(PyExc_TypeError,
                                 "cannot serialize unknown python type of %r",
@@ -201,6 +269,88 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
     }
 
     return 1;
+}
+
+static int call_python_function_from_lua(lua_State *L) {
+
+    int ret = 0;
+    PyObject* py_args = NULL;
+    PyObject* result = NULL;
+
+    // make sure we're being called correctly
+    void *ud = luaL_checkudata(L, 1, EXECUTOR_LUA_FUNCTION_MT_KEY);
+    luaL_argcheck(L, ud != NULL, 1, "pyfunction expected"); // longjmps out on failure
+
+    // find our pointer back to self
+    lua_pushlightuserdata(L, (void *)&EXECUTOR_LUA_REGISTRY_KEY);
+    lua_gettable(L, LUA_REGISTRYINDEX);
+
+    _LuaExecutor* self = (_LuaExecutor*)lua_touserdata(L, -1);
+    lua_pop(L, 1); /* remove it from the stack now that we have it */
+
+    /* from here on out, we must exit through the error/done labels */
+    self->limit_allocation = FALSE;
+
+    // get the gil. the self->l_mutex should already be held
+    PyGILState_STATE gstate;
+    gstate = PyGILState_Ensure();
+
+    // arg 1 is the userdata that contains the PyObject* address to the
+    // function. 2..nargs are the arguments they have passed
+    int nargs = lua_gettop(L);
+    PyObject* py_callable = *(PyObject**)ud;
+
+    py_args = serialize_lua_to_python_multi(L, 2, nargs-1, self->max_recursion);
+    if(py_args == NULL) {
+        goto error;
+    }
+
+    // now that that's in Python format, we don't need the lua version anymore
+    lua_pop(L, 1+nargs); // the userdata and the nargs
+
+    result = PyEval_CallObject(py_callable, py_args);
+    if(result == NULL) {
+        goto error;
+    }
+
+    ret = encode_python_to_lua(L, result, 0, self->max_recursion);
+
+error:
+    self->limit_allocation = TRUE;
+
+    Py_XDECREF(py_args);
+    Py_XDECREF(result);
+
+    if(PyErr_Occurred()) {
+        // there will be a Python exception on the stack. Translate it into a
+        // Lua exception and clear it
+
+        PyObject *ptype, *pvalue, *ptraceback;
+        PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+        PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
+        char *error_message = PyString_AsString(pvalue);
+
+        PyErr_Clear();
+
+        // release the gil
+        PyGILState_Release(gstate);
+
+        lua_pushstring(L, error_message);
+        lua_error(L);
+
+        return 0; // unreachable
+
+    } else {
+        // release the gil
+        PyGILState_Release(gstate);
+        return ret;
+    }
+}
+
+static int free_python_function(lua_State *L) {
+    PyObject** fn = (PyObject**)lua_touserdata(L, -1);
+    Py_DECREF(*fn);
+    return 0; // number of return values
 }
 
 static void format_python_exception(PyObject* exc_type, const char *fmt, ...) {
@@ -264,8 +414,9 @@ int serialize_python_to_lua(lua_State* L, PyObject* env, int max_recursion) {
 
     while (PyDict_Next(env, &pos, &key, &value)) {
         if(!PyString_Check(key)) {
-            /* TODO: put the key in the error message */
-            PyErr_SetString(PyExc_TypeError, "key must be str");
+            format_python_exception(PyExc_TypeError,
+                                    "key %r is not str",
+                                    key, NULL);
             return 0;
         }
 
@@ -288,6 +439,44 @@ int serialize_python_to_lua(lua_State* L, PyObject* env, int max_recursion) {
     return 1;
 }
 
+PyObject* serialize_lua_to_python_multi(lua_State* L,
+                                        int start_idx, int count,
+                                        int max_recursion) {
+    PyObject* pyresult = NULL;
+    pyresult = PyTuple_New(count);
+
+    if(pyresult==NULL) {
+        goto error;
+    }
+
+    if(count==0) {
+        // success, return the empty tuple
+        goto done;
+    }
+
+    for(int i=0; i<count; i++) {
+        int stacknum = abs_index(L, start_idx+i);
+
+        PyObject* thisresult = serialize_lua_to_python(L, stacknum,
+                                                       0, max_recursion);
+        if(thisresult==NULL) {
+            goto error;
+        }
+        // steals the thisresult ref, even if it fails
+        if(PyTuple_SetItem(pyresult, i, thisresult)==-1) {
+            goto error;
+        }
+    }
+
+done:
+    return pyresult;
+
+error:
+    Py_XDECREF(pyresult);
+    return NULL;
+}
+
+
 PyObject* serialize_lua_to_python(lua_State* L, int idx,
                                   int recursion, int max_recursion) {
     /*
@@ -305,14 +494,14 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
     size_t string_len;
 
     /* convert to absolute index because we'll mess with the stack */
-    idx = abs_index(L, idx);
+    int e_idx = abs_index(L, idx);
 
     if(recursion > max_recursion) {
         PyErr_SetString(PyExc_RuntimeError, "serialize_lua_to_python recursed too far");
         return NULL;
     }
 
-    switch(lua_type(L, idx)) {
+    switch(lua_type(L, e_idx)) {
 
     case LUA_TNIL:
         ret = Py_None;
@@ -320,7 +509,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
         break;
 
     case LUA_TNUMBER:
-        as_double = lua_tonumber(L, idx);
+        as_double = lua_tonumber(L, e_idx);
         ret = PyFloat_FromDouble(as_double);
         if(ret == NULL) {
             return NULL;
@@ -328,7 +517,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
         break;
 
     case LUA_TBOOLEAN:
-        as_boolean = lua_toboolean(L, idx);
+        as_boolean = lua_toboolean(L, e_idx);
         if(as_boolean) {
             ret = Py_True;
         } else {
@@ -338,7 +527,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
         break;
 
     case LUA_TSTRING:
-        string = lua_tolstring(L, idx, &string_len);
+        string = lua_tolstring(L, e_idx, &string_len);
         ret = PyString_FromStringAndSize(string, string_len);
         if(ret==NULL) {
             return NULL;
@@ -353,7 +542,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
             return NULL;
         }
 
-        int table_index = abs_index(L, idx);
+        int table_index = abs_index(L, e_idx);
 
         lua_pushnil(L);  /* first key */
 
@@ -362,6 +551,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
             PyObject* key = serialize_lua_to_python(L, -2,
                                                     recursion+1, max_recursion);
             if(key == NULL) {
+                // TODO do these need to mess with the lua stack too?
                 Py_DECREF(ret);
                 return NULL;
             }
@@ -393,7 +583,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
     default:
         PyErr_Format(PyExc_RuntimeError,
                      "cannot serialize unknown Lua type %s",
-                     lua_typename(L, lua_type(L, idx)));
+                     lua_typename(L, lua_type(L, e_idx)));
         return NULL;
     }
 
@@ -409,22 +599,26 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwarg
      */
     Py_ssize_t max_lua_allocation = 2*1024*1024;
     /*
-     * this is about one second on my laptop. TODO investigate what it would
-     * take to make this into seconds instead of cycles
+     * how many instruction cycles to execute before checking runtime
      */
-    unsigned long long max_lua_cycles = 500000;
+    unsigned long long max_lua_cycles_hz = 500000;
+    unsigned long long max_lua_runtime = 1000*1000; // 1 second
     /*
      * max depth of serialisation/deserialisation
      */
     unsigned long max_lua_depth = 10;
 
-    static char *kwdlist[] = {"max_memory", "max_cycles", "max_object_depth"};
+    static char *kwdlist[] = {
+        "max_memory", "max_runtime", "max_cycles_hz",
+        "max_object_depth",
+        NULL};
 
     if (!PyArg_ParseTupleAndKeywords(args, kwargs,
-                                     "|nKk",
+                                     "|nKKk",
                                      kwdlist,
                                      &max_lua_allocation,
-                                     &max_lua_cycles,
+                                     &max_lua_runtime,
+                                     &max_lua_cycles_hz,
                                      &max_lua_depth)) {
         return -1;
     }
@@ -433,7 +627,9 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwarg
 
     self->memory_used = 0;
     self->memory_limit = max_lua_allocation;
+    self->max_lua_runtime = max_lua_runtime;
     self->max_recursion = max_lua_depth;
+    self->limit_allocation = FALSE;
 
     lua_State *L = NULL;
 
@@ -473,7 +669,7 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwarg
     luaL_openlibs(L);
 
     /* install our time-limiting hook */
-    lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, max_lua_cycles);
+    lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, max_lua_cycles_hz);
 
     /*
      * add a pointer back to the _LuaExecutor object within the lua_State.
@@ -484,6 +680,23 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwarg
     lua_pushlightuserdata(L, (void*)self); /* push value */
     /* registry[&EXECUTOR_LUA_REGISTRY_KEY] = self */
     lua_settable(L, LUA_REGISTRYINDEX);
+
+    /*
+     * set up the metatable for userdata objects for calling Python functions
+     * from Lua
+     */
+    luaL_newmetatable(L, EXECUTOR_LUA_FUNCTION_MT_KEY);
+    // add the __gc method so we can clean them up
+    lua_pushstring(L, "__gc");
+    lua_pushcfunction(L, free_python_function);
+    lua_settable(L, -3);
+    // and make them callable
+    lua_pushstring(L, "__call");
+    lua_pushcfunction(L, call_python_function_from_lua);
+    lua_settable(L, -3);
+    lua_pop(L, 1); // get the metatable off of the stack
+
+    self->limit_allocation = TRUE;
 
     self->L = L;
 
@@ -541,6 +754,9 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
         return NULL;
     }
 
+    // turn off during serialize_python_to_lua
+    self->limit_allocation = FALSE;
+
     /* if we got an environment to pass in, translate it from Python to Lua */
     if(PyDict_Size(env)>=0 && !serialize_python_to_lua(L, env, self->max_recursion)) {
         /* there will be an error on the Python stack */
@@ -571,6 +787,10 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
     // TODO check the return value here
     pthread_mutex_lock(&self->l_mutex);
     Py_BEGIN_ALLOW_THREADS;
+
+    // turn on while running the user code. because we use pcall, allocation
+    // failures will return back to us here instead of longjmping out into space
+    self->limit_allocation = TRUE;
 
     /* Ask Lua to run our script */
     lua_result = lua_pcall(L, 0, LUA_MULTRET, 0);
@@ -609,43 +829,57 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
     int stack_top_after = lua_gettop(L);
     int results_returned = 1+stack_top_after-stack_top_before;
 
-    pyresult = PyTuple_New(results_returned);
+    pyresult = serialize_lua_to_python_multi(L,
+                                             stack_top_before,
+                                             results_returned,
+                                             self->max_recursion);
 
     if(pyresult==NULL) {
-        goto done;
-    }
-
-    if(results_returned==0) {
-        // success, return the empty tuple
-        goto done;
-    }
-
-    for(int i=0; i<results_returned; i++) {
-        int stacknum = stack_top_before+i;
-        PyObject* thisresult = serialize_lua_to_python(L, stacknum,
-                                                       0, self->max_recursion);
-        if(thisresult==NULL) {
-            goto error;
-        }
-        // steals the thisresult ref, even if it fails
-        if(PyTuple_SetItem(pyresult, i, thisresult)==-1) {
-            goto error;
-        }
+        goto error;
     }
 
     lua_pop(L, results_returned);
     goto done;
 
 error:
-    if(pyresult != NULL) {
-        Py_DECREF(pyresult);
-    }
+    Py_XDECREF(pyresult);
     lua_pop(L, results_returned);
 
 done:
+    // make sure this gets set back on
+    self->limit_allocation = TRUE;
+
     if(PyErr_Occurred()) {
         return NULL;
     }
 
     return pyresult;
+}
+
+static void stackDump(lua_State *L) {
+    // http://www.lua.org/pil/24.2.3.html
+    int top = lua_gettop(L);
+
+    for(int i = 1; i <= top; i++) {  /* repeat for each level */
+        int t = lua_type(L, i);
+        switch (t) {
+            case LUA_TSTRING:  /* strings */
+                printf("`%s'", lua_tostring(L, i));
+                break;
+
+            case LUA_TBOOLEAN:  /* booleans */
+                printf(lua_toboolean(L, i) ? "true" : "false");
+                break;
+
+            case LUA_TNUMBER:  /* numbers */
+                printf("%g", lua_tonumber(L, i));
+                break;
+
+            default:  /* other values */
+                printf("%s", lua_typename(L, t));
+                break;
+        }
+        printf("  ");  /* put a separator */
+    }
+    printf("\n");  /* end the listing */
 }

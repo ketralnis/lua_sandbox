@@ -551,7 +551,8 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
             PyObject* key = serialize_lua_to_python(L, -2,
                                                     recursion+1, max_recursion);
             if(key == NULL) {
-                // TODO do these need to mess with the lua stack too?
+                lua_pop(L, 2); // key, value
+
                 Py_DECREF(ret);
                 return NULL;
             }
@@ -559,12 +560,16 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
             PyObject* value = serialize_lua_to_python(L, -1,
                                                       recursion+1, max_recursion);
             if(value == NULL) {
+                lua_pop(L, 2); // key, value
+
                 Py_DECREF(key);
                 Py_DECREF(ret);
                 return NULL;
             }
 
             if(PyDict_SetItem(ret, key, value) == -1) {
+                lua_pop(L, 2); // key, value
+
                 Py_DECREF(key);
                 Py_DECREF(value);
                 Py_DECREF(ret);
@@ -577,6 +582,8 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
 
             lua_pop(L, 1);  /* removes `value'; keeps `key' for next iteration */
         }
+
+        // now just the table is on the stack, just like we got it
 
         break;
 

@@ -16,9 +16,6 @@ ${INSTALLEDENV}: setup.py
 	virtualenv-2.7 .env
 	make rebuild
 
-dist: ${INSTALLEDENV}
-	.env/bin/python ./setup.py dist
-
 sdist: ${INSTALLEDENV}
 	.env/bin/python ./setup.py sdist
 

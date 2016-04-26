@@ -35,12 +35,12 @@ _executor = Extension('lua_sandbox._executor',
                       )
 
 setup(
-    name='lua-sandbox',
+    name='lua_sandbox',
     version='1.0.0',
     description='A library to run lua code inside of a sandbox from Python',
     author='David King',
     author_email='dking@ketralnis.com',
-    #url='https://docs.python.org/extending/building',
+    url='https://github.com/ketralnis/lua_sandbox',
     ext_modules=[_executor],
     packages=find_packages(),
     package_data={'lua_sandbox': ['lua_sandbox/lua_utils/*.lua']},

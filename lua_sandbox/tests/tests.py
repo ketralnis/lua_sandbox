@@ -126,6 +126,17 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(({1.0: 8.0, 2.0: 9.0},), ret)
         self.assertEqual([2.0, 3.0], closed)
 
+    def test_method_messing(self):
+        class MyObject(object):
+            def double(self, x):
+                return x*2
+
+        program = """
+            return doubler(4)
+        """
+        ret = self.ex.execute(program, {'doubler': MyObject().double})
+        self.assertEqual((8.0,), ret)
+
     def test_pyfunction_exception(self):
         program = """
             return foo("hello")

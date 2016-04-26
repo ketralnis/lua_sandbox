@@ -232,7 +232,7 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
             lua_settable(L, -3);
         }
 
-    } else if(PyFunction_Check(value)) {
+    } else if(PyCallable_Check(value)) {
         // we implement functions as userdatas with contents of the pointer to
         // the PyObject* that have a metatable with __call and __gc, set up in
         // _LuaExecutor_init
@@ -308,7 +308,7 @@ static int call_python_function_from_lua(lua_State *L) {
     // now that that's in Python format, we don't need the lua version anymore
     lua_pop(L, 1+nargs); // the userdata and the nargs
 
-    result = PyEval_CallObject(py_callable, py_args);
+    result = PyObject_CallObject(py_callable, py_args);
     if(result == NULL) {
         goto error;
     }

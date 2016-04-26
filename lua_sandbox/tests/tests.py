@@ -128,13 +128,17 @@ class TestLuaExecution(unittest.TestCase):
 
     def test_pyfunction_exception(self):
         program = """
-            a = 1+3
-            return foo(2, 3)
+            return foo("hello")
         """
         def bad_closure(x):
             raise Exception("nuh uh")
-        with self.assertRaises(RuntimeError):
+
+        try:
             self.ex.execute(program, {'foo': bad_closure})
+        except RuntimeError as e:
+            self.assertIn('nuh uh', e.message)
+        else:
+            self.assertTrue(False)
 
     def test_no_weird_lua_types(self):
         def _tester(program, args={}):

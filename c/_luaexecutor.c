@@ -328,14 +328,29 @@ error:
         PyObject *ptype, *pvalue, *ptraceback;
         PyErr_Fetch(&ptype, &pvalue, &ptraceback);
         PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
-        char *error_message = PyString_AsString(pvalue);
+
+        char* error_message = NULL;
+
+        PyObject* repr = PyObject_Repr(pvalue);
+        if(repr == NULL) {
+            // fine we just won't use it then
+            PyErr_Clear();
+        } else if(!PyString_CheckExact(repr)) {
+            // if repr doesn't return a string we can't use it
+        } else {
+            error_message = PyString_AsString(repr);
+        }
+
+        self->limit_allocation = FALSE;
+        lua_pushstring(L, error_message);
+        self->limit_allocation = TRUE;
 
         PyErr_Clear();
+        Py_XDECREF(repr);
 
         // release the gil
         PyGILState_Release(gstate);
 
-        lua_pushstring(L, error_message);
         lua_error(L);
 
         return 0; // unreachable

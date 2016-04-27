@@ -5,8 +5,8 @@
 extern PyTypeObject _LuaExecutorType;
 
 // we fill these on module init
-PyObject *LuaException;
-PyObject *LuaOutOfMemoryException;
+PyObject *LuaException = NULL;
+PyObject *LuaOutOfMemoryException = NULL;
 
 PyMODINIT_FUNC init_executor(void) {
     // initialise the module

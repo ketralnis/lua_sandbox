@@ -13,6 +13,9 @@
 
 #include "_luaexecutor.h"
 
+extern PyObject *LuaException;
+extern PyObject *LuaOutOfMemoryException;
+
 #if LUA_VERSION_NUM == 501
 // lua5.1 doesn't define this, but uses it the same way
 #define LUA_OK 0
@@ -95,11 +98,11 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
      */
 
     if(recursion > max_recursion) {
-        PyErr_SetString(PyExc_RuntimeError, "encode_python_to_lua recursed too far");
+        PyErr_SetString(LuaException, "encode_python_to_lua recursed too far");
         return 0;
 
     } else if(!lua_checkstack(L, 1)) {
-        PyErr_SetString(PyExc_TypeError, "not enough lua stack space");
+        PyErr_SetString(LuaException, "not enough lua stack space");
         return 0;
 
     } else if(value == Py_None) {
@@ -245,7 +248,7 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
             // lua functions that fails incorrectly, and we should only be in
             // here with allocation limits disabled anyway
 
-            PyErr_Format(PyExc_RuntimeError,
+            PyErr_Format(LuaOutOfMemoryException,
                          "reached lua memory limit");
 
             return 0;
@@ -512,7 +515,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
     int e_idx = abs_index(L, idx);
 
     if(recursion > max_recursion) {
-        PyErr_SetString(PyExc_RuntimeError, "serialize_lua_to_python recursed too far");
+        PyErr_SetString(LuaException, "serialize_lua_to_python recursed too far");
         return NULL;
     }
 
@@ -603,7 +606,7 @@ PyObject* serialize_lua_to_python(lua_State* L, int idx,
         break;
 
     default:
-        PyErr_Format(PyExc_RuntimeError,
+        PyErr_Format(LuaException,
                      "cannot serialize unknown Lua type %s",
                      lua_typename(L, lua_type(L, e_idx)));
         return NULL;
@@ -798,7 +801,7 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
             goto done;
         }
 
-        PyErr_SetObject(PyExc_RuntimeError, pyerrstring);
+        PyErr_SetObject(LuaException, pyerrstring);
 
         goto done;
     }
@@ -834,7 +837,11 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
             goto done;
         }
 
-        PyErr_SetObject(PyExc_RuntimeError, pyerrstring);
+        if(lua_result == LUA_ERRMEM) {
+            PyErr_SetObject(LuaOutOfMemoryException, pyerrstring);
+        } else {
+            PyErr_SetObject(LuaException, pyerrstring);
+        }
 
         goto done;
     }

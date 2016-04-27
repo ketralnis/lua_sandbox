@@ -1,4 +1,6 @@
 from lua_sandbox._executor import _LuaExecutor
+from lua_sandbox._executor import LuaException
+from lua_sandbox._executor import LuaOutOfMemoryException
 from lua_sandbox.utils import list_to_table, datafile
 
 

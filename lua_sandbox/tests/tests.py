@@ -2,6 +2,8 @@ import unittest
 import time
 
 from lua_sandbox.executor import SimpleSandboxedExecutor
+from lua_sandbox.executor import LuaException
+from lua_sandbox.executor import LuaOutOfMemoryException
 
 
 class TestLuaExecution(unittest.TestCase):
@@ -101,7 +103,7 @@ class TestLuaExecution(unittest.TestCase):
             self.ex.execute(program, {'foo': [1, 2, 3, 4, set()]})
         self.assertEqual(self.ex._stack_top(), 0)
 
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(LuaException):
             # recursive structure
             d = {}
             d['foo'] = d
@@ -146,7 +148,7 @@ class TestLuaExecution(unittest.TestCase):
 
         try:
             self.ex.execute(program, {'foo': bad_closure})
-        except RuntimeError as e:
+        except LuaException as e:
             self.assertIn('nuh uh', e.message)
         else:
             self.assertTrue(False)
@@ -156,7 +158,7 @@ class TestLuaExecution(unittest.TestCase):
             program = """
                 return function() return 5 end
             """
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(LuaException):
                 self.assertEqual(self.ex._stack_top(), 0)
                 self.ex.execute(program, {})
                 self.assertEqual(self.ex._stack_top(), 0)
@@ -193,13 +195,13 @@ class TestLuaExecution(unittest.TestCase):
         program = """
             assert false
         """
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(LuaException):
             self.ex.execute(program)
 
         program = """
             error("nuh uh")
         """
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(LuaException):
             self.ex.execute(program)
 
 
@@ -208,7 +210,7 @@ class TestSafeguards(TestLuaExecution):
 
         def _tester(program):
             start_time = time.time()
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(LuaOutOfMemoryException):
                 self.ex.execute(program)
             self.assertLess(time.time()-start_time, 1.1)
 
@@ -220,14 +222,10 @@ class TestSafeguards(TestLuaExecution):
             return 1
         """)
 
-        _tester("""
-            ('lol'):rep(1e9)
-        """)
-
     def test_timeout(self):
         def _tester(program):
             start_time = time.time()
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(LuaException):
                 self.ex.execute(program)
             self.assertLess(time.time()-start_time, 1.1)
 
@@ -244,7 +242,7 @@ class TestSafeguards(TestLuaExecution):
             print(foo)
             return 0
         """
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(LuaException):
             self.ex.execute(program, {'foo':0})
 
     def test_no_regex(self):
@@ -255,7 +253,7 @@ class TestSafeguards(TestLuaExecution):
         """
 
         started = time.time()
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(LuaException):
             self.ex.execute(program)
 
         self.assertLess(time.time() - started, 1.0)
@@ -291,7 +289,7 @@ class TestLuaSandboxedExecutor(TestLuaExecution):
             program = """
             error("oh noes")
             """
-            with self.assertRaises(RuntimeError):
+            with self.assertRaises(LuaException):
                 ex.execute(program, {})
 
             self.assertEqual(ex._stack_top(), 0)

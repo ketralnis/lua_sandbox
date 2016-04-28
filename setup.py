@@ -1,5 +1,6 @@
 #!/usr/bin/env python2.7
 
+import sys
 import os
 import json
 import platform
@@ -11,8 +12,11 @@ build_config = {}
 BUILDCONF = os.environ.get('LUASANDBOX_BUILDCONF', 'build.conf')
 
 if os.path.exists(BUILDCONF):
+    sys.stderr.write("building with %s\n" % (BUILDCONF,))
     with open(BUILDCONF) as f:
-        build_config = json.loads(f.read())
+        build_config.update(json.loads(f.read()))
+else:
+    sys.stderr.write("couldn't find %s\n" % (BUILDCONF,))
 
 LUA_LIB = build_config.get('lua_lib', 'lua5.2')
 INCLUDE_DIRS = build_config.get('include_dirs', [])

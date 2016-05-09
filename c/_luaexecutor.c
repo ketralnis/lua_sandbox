@@ -757,8 +757,8 @@ static PyObject* _LuaExecutor__stack_top(_LuaExecutor* self) {
 }
 
 static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
-    PyObject* env;
-    PyObject* pyresult;
+    PyObject* env = NULL;
+    PyObject* pyresult = NULL;
 
     char* program_code = NULL;
     size_t program_len = 0;

@@ -4,6 +4,7 @@ local e=_ENV
 function make_sandbox()
     -- sample sandbox environment
     sandbox_env = {
+        error = error,
         ipairs = ipairs,
         next = next,
         pairs = pairs,
@@ -63,7 +64,7 @@ function run_sandbox(env_globals, code, desc)
         sandbox_env[k] = v
     end
 
-    ret = {}
+    local ret = {}
 
     for library, segment in ipairs(code) do
         local fn = assert(load(segment, desc.."#"..library, "t", sandbox_env))

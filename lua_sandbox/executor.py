@@ -1,3 +1,5 @@
+import itertools
+
 from lua_sandbox._executor import _LuaExecutor
 from lua_sandbox._executor import LuaException
 from lua_sandbox._executor import LuaOutOfMemoryException
@@ -9,8 +11,8 @@ class LuaExecutor(_LuaExecutor):
 
 
 class SandboxedExecutor(LuaExecutor):
-    def execute(self, sandboxer, program, env=None, desc=None):
-        libs = list_to_table([program])
+    def execute(self, sandboxer, program, libs=(), env=None, desc=None):
+        libs = list_to_table(itertools.chain(libs, (program,)))
         return _LuaExecutor.execute(self,
                                     sandboxer,
                                     {'code': libs,
@@ -21,6 +23,7 @@ class SandboxedExecutor(LuaExecutor):
 class SimpleSandboxedExecutor(SandboxedExecutor):
     sandboxer = datafile('lua_utils/safe_sandbox.lua')
 
-    def execute(self, program, env=None, desc=None):
+    def execute(self, program, libs=(), env=None, desc=None):
         sup = super(SimpleSandboxedExecutor, self)
-        return sup.execute(self.sandboxer, program, env=env, desc=desc)
+        return sup.execute(self.sandboxer, program, libs=libs,
+                           env=env, desc=desc)

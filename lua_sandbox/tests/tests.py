@@ -8,7 +8,7 @@ from lua_sandbox.executor import LuaOutOfMemoryException
 
 class TestLuaExecution(unittest.TestCase):
     def setUp(self):
-        self.ex = SimpleSandboxedExecutor()
+        self.ex = SimpleSandboxedExecutor(max_runtime=1000*1000)
 
     def test_basics1(self):
         program = """
@@ -193,7 +193,7 @@ class TestLuaExecution(unittest.TestCase):
 
     def test_assertions(self):
         program = """
-            assert false
+            assert(false)
         """
         with self.assertRaises(LuaException):
             self.ex.execute(program)
@@ -245,9 +245,10 @@ class TestSafeguards(TestLuaExecution):
         with self.assertRaises(LuaException):
             self.ex.execute(program, {'foo':0})
 
+    @unittest.skip("allowing this for now")
     def test_no_regex(self):
-        # there are some regex operations you can do that are super slow, so we
-        # block regexes entirely in the SimpleSandboxingExecutor
+        # there are some lua pattern operations you can do that are super slow,
+        # so we block them entirely in the SimpleSandboxingExecutor
         program = """
             return string.find(("a"):rep(1e4), ".-.-.-.-b$")
         """

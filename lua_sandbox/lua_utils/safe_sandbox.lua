@@ -21,7 +21,18 @@ function make_sandbox()
         string = {
             byte = string.byte, char = string.char, format = string.format,
             len = string.len, lower = string.lower, rep = string.rep,
-            reverse = string.reverse, upper = string.upper
+            reverse = string.reverse, upper = string.upper,
+
+            -- note!
+            -- we include these in our example sandbox, but depending on how
+            -- much you trust your lua code you may want to disallow them. they
+            -- can be used to hang the interpreter because it's possible to
+            -- create pathological patterns like:
+            --     string.find(("a"):rep(1e4), ".-.-.-.-b$")
+            -- and the time-limiting debug hooks can't execute while they are
+            -- running
+            find = string.find, gmatch = string.gmatch, gsub = string.gsub,
+            match = string.match, sub = string.sub,
         },
         table = {
             insert = table.insert, maxn = table.maxn, remove = table.remove,
@@ -42,14 +53,6 @@ function make_sandbox()
         },
     }
 
-    -- these are blocked for now but bookmarked in case I change my mind
-    blocked = {
-        string = {
-            find = string.find, gmatch = string.gmatch, gsub = string.gsub,
-            match = string.match,  sub = string.sub,
-        }
-    }
-
     return sandbox_env
 end
 
@@ -67,7 +70,11 @@ function run_sandbox(env_globals, code, desc)
     local ret = {}
 
     for library, segment in ipairs(code) do
-        local fn = assert(load(segment, desc.."#"..library, "t", sandbox_env))
+        local segment_desc = desc.."#"..library
+        local fn = load(segment, segment_desc, "t", sandbox_env)
+        if not fn then
+            error("couldn't load segment " .. segment_desc)
+        end
         ret = table.pack(fn())
     end
 

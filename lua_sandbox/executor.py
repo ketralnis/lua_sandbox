@@ -23,7 +23,7 @@ class SandboxedExecutor(LuaExecutor):
 class SimpleSandboxedExecutor(SandboxedExecutor):
     sandboxer = datafile('lua_utils/safe_sandbox.lua')
 
-    def execute(self, program, libs=(), env=None, desc=None):
+    def execute(self, program, env=None, desc=None, libs=()):
         sup = super(SimpleSandboxedExecutor, self)
         return sup.execute(self.sandboxer, program, libs=libs,
                            env=env, desc=desc)

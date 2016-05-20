@@ -246,7 +246,7 @@ class TestSafeguards(TestLuaExecution):
             self.ex.execute(program, {'foo':0})
 
     @unittest.skip("allowing this for now")
-    def test_no_regex(self):
+    def test_no_patterns(self):
         # there are some lua pattern operations you can do that are super slow,
         # so we block them entirely in the SimpleSandboxingExecutor
         program = """
@@ -267,6 +267,9 @@ class TestSafeguards(TestLuaExecution):
             return foo
         """
         self.ex.execute(program, {'foo': 0})
+
+    def test__get_lua(self):
+        self.assertTrue(self.ex._get_lua())
 
 
 class TestLuaSandboxedExecutor(TestLuaExecution):

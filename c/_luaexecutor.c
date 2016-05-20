@@ -16,6 +16,11 @@
 extern PyObject *LuaException;
 extern PyObject *LuaOutOfMemoryException;
 
+#if PY_VERSION_HEX < 0x02070000
+// because we use PyCapsule
+#error "I need Python >= 2.7.0"
+#endif
+
 #if LUA_VERSION_NUM == 501
 // lua5.1 doesn't define this, but uses it the same way
 #define LUA_OK 0
@@ -753,7 +758,23 @@ static void _LuaExecutor_dealloc(_LuaExecutor* self) {
 
 static PyObject* _LuaExecutor__stack_top(_LuaExecutor* self) {
     return PyInt_FromLong(lua_gettop(self->L));
+}
 
+static void dealloc_lua_capsule(PyObject* capsule) {
+    _LuaExecutor* self = (_LuaExecutor*)PyCapsule_GetContext(capsule);
+    Py_XDECREF(self);
+}
+
+static PyObject* _LuaExecutor__get_lua(_LuaExecutor* self) {
+    PyObject* capsule = PyCapsule_New((void*)(self->L),
+                                      EXECUTOR_CAPSULE_NAME,
+                                      dealloc_lua_capsule);
+    if(capsule == NULL) {
+        return NULL;
+    }
+    PyCapsule_SetContext(capsule, (void*)self);
+    Py_INCREF(self); // it holds a reference to us
+    return capsule;
 }
 
 static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {

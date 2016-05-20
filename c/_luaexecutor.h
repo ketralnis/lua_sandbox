@@ -10,6 +10,7 @@
 
 static const char* EXECUTOR_LUA_REGISTRY_KEY = "_LuaExecutor";
 static const char* EXECUTOR_LUA_FUNCTION_MT_KEY = "_LuaExecutor.call_py_fn";
+static const char* EXECUTOR_CAPSULE_NAME = "_LuaExecutor__get_lua";
 
 // seriously?
 #ifndef TRUE
@@ -68,6 +69,7 @@ static int _LuaExecutor_init(_LuaExecutor *self, PyObject *args, PyObject *kwds)
 static void _LuaExecutor_dealloc(_LuaExecutor* self);
 static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args);
 static PyObject* _LuaExecutor__stack_top(_LuaExecutor* self);
+static PyObject* _LuaExecutor__get_lua(_LuaExecutor* self);
 PyObject* serialize_lua_to_python_multi(lua_State* L,
                                         int start_idx, int count,
                                         int max_recursion);
@@ -86,6 +88,11 @@ static PyMethodDef _LuaExecutorType_methods[] = {
         "_stack_top",
         (PyCFunction)_LuaExecutor__stack_top, METH_NOARGS,
         "private function to look at how big the internal stack is, mostly for tests"
+    },
+    {
+        "_get_lua",
+        (PyCFunction)_LuaExecutor__get_lua, METH_NOARGS,
+        "private function to retrieve the lua_State wrapped in a PyCapsule"
     },
     {NULL, NULL, 0, NULL}
 };

@@ -147,11 +147,23 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
 
         lua_pushnumber(L, as_double);
 
-    } else if(PyString_Check(value)) {
+    } else if(PyString_Check(value) || PyUnicode_Check(value)) {
+        PyObject* as_str = NULL;
         char* body = NULL;
         Py_ssize_t len = 0;
+        PyObject *use_value = value;
 
-        if(PyString_AsStringAndSize(value, &body, &len)==-1) {
+        if(PyUnicode_Check(value)) {
+            as_str = PyUnicode_AsUTF8String(value);
+            if(as_str==NULL) {
+                return 0;
+            }
+            use_value = as_str;
+        }
+
+        // str
+        if(PyString_AsStringAndSize(use_value, &body, &len)==-1) {
+            Py_XDECREF(as_str);
             return 0;
         }
 
@@ -160,10 +172,12 @@ int encode_python_to_lua(lua_State* L, PyObject* value,
         lua_pushlstring(L, body, len);
 #elif LUA_VERSION_NUM == 502 || LUA_VERSION_NUM == 503
         if(lua_pushlstring(L, body, len)==NULL) {
+            Py_XDECREF(as_str);
             PyErr_NoMemory();
             return 0;
         }
 #endif
+        Py_XDECREF(as_str);
 
     } else if(PyTuple_CheckExact(value) || PyList_CheckExact(value)) {
         Py_ssize_t len = PySequence_Length(value);

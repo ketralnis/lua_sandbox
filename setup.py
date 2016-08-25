@@ -21,7 +21,7 @@ else:
 LUA_LIB = build_config.get('lua_lib', 'lua5.2')
 INCLUDE_DIRS = build_config.get('include_dirs', ["/usr/include/lua5.2"])
 LIBRARY_DIRS = build_config.get('library_dirs', [])
-EXTRA_COMPILE_ARGS = build_config.get('extra_compile_args', [])
+EXTRA_COMPILE_ARGS = build_config.get('extra_compile_args', ["-g"])
 EXTRA_LINK_ARGS = build_config.get('extra_link_args', [])
 
 if 'jit' in LUA_LIB and platform.system() == 'Darwin':

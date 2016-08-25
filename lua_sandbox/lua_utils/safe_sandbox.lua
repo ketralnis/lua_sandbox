@@ -37,6 +37,7 @@ function make_sandbox()
         table = {
             insert = table.insert, maxn = table.maxn, remove = table.remove,
             sort = table.sort, pack = table.pack, unpack = table.unpack,
+            concat = table.concat,
         },
         math = {
             abs = math.abs, acos = math.acos, asin = math.asin,

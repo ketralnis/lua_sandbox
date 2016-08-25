@@ -300,4 +300,4 @@ class TestLuaSandboxedExecutor(TestLuaExecution):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    unittest.main(verbosity=0, exit=False)

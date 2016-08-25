@@ -347,7 +347,7 @@ error:
         // there will be a Python exception on the stack. Translate it into a
         // Lua exception and clear it
 
-        PyObject *ptype, *pvalue, *ptraceback;
+        PyObject *ptype=NULL, *pvalue=NULL, *ptraceback=NULL;
         PyErr_Fetch(&ptype, &pvalue, &ptraceback);
         PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
 
@@ -369,6 +369,9 @@ error:
 
         PyErr_Clear();
         Py_XDECREF(repr);
+        Py_XDECREF(ptype);
+        Py_XDECREF(pvalue);
+        Py_XDECREF(ptraceback);
 
         // release the gil
         PyGILState_Release(gstate);
@@ -426,6 +429,7 @@ static void format_python_exception(PyObject* exc_type, const char *fmt, ...) {
 
     /* everything was successful, set the new object on the stack */
     PyErr_SetObject(exc_type, formatted);
+    Py_XDECREF(formatted);
 
 cleanup:
 
@@ -837,6 +841,7 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
         }
 
         PyErr_SetObject(LuaException, pyerrstring);
+        Py_XDECREF(pyerrstring);
 
         goto done;
     }
@@ -874,8 +879,10 @@ static PyObject* _LuaExecutor_execute(_LuaExecutor* self, PyObject* args) {
 
         if(lua_result == LUA_ERRMEM) {
             PyErr_SetObject(LuaOutOfMemoryException, pyerrstring);
+            Py_XDECREF(pyerrstring);
         } else {
             PyErr_SetObject(LuaException, pyerrstring);
+            Py_XDECREF(pyerrstring);
         }
 
         goto done;

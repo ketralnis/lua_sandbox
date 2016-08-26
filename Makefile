@@ -26,6 +26,9 @@ rebuild:
 test: ${INSTALLEDENV}
 	.env/bin/python -m lua_sandbox.tests.tests ${TEST}
 
+leaktest: ${INSTALLEDENV} test
+	LEAKTEST=true .env/bin/python -m lua_sandbox.tests.tests ${TEST} > /dev/null 2>&1
+
 gtest: ${INSTALLEDENV}
 	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}
 

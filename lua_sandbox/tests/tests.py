@@ -1,5 +1,8 @@
-import unittest
+# -*- coding: utf-8 -*-
+
+import os
 import time
+import unittest
 
 from lua_sandbox.executor import SimpleSandboxedExecutor
 from lua_sandbox.executor import LuaException
@@ -80,6 +83,22 @@ class TestLuaExecution(unittest.TestCase):
                                    {'foo': input_data}),
                          (expected_output,))
         self.assertEqual(self.ex._stack_top(), 0)
+
+    def test_serialize_unicode(self):
+        program = """
+            return data
+        """
+
+        english = 'hello'
+        chinese = u'你好'
+
+        input_data = {english: chinese}
+
+        self.assertEqual(self.ex.execute(program,
+                                   {'data': input_data}),
+                         ({english: chinese.encode('utf8')},))
+        self.assertEqual(self.ex._stack_top(), 0)
+
 
     def test_no_weird_python_types(self):
         program = """
@@ -300,4 +319,8 @@ class TestLuaSandboxedExecutor(TestLuaExecution):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=0, exit=False)
+    if os.environ.get('LEAKTEST', False):
+        while True:
+            unittest.main(verbosity=0, exit=False)
+    else:
+        unittest.main()

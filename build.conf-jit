@@ -1,5 +1,5 @@
 {
-  "lua_lib": "luajit-5.1",
+  "lua_lib_name": "luajit-5.1",
   "library_dirs": ["/opt/local/lib"],
   "include_dirs": ["/opt/local/include/luajit-2.0"]
 }

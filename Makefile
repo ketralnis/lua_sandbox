@@ -7,8 +7,7 @@ INSTALLEDENV=.env/installed
 installenv: ${INSTALLEDENV}
 
 check_dependencies:
-	which lua
-	which virtualenv
+	which virtualenv-2.7
 
 ${INSTALLEDENV}: setup.py
 	make check_dependencies
@@ -37,6 +36,7 @@ clean:
 
 distclean: clean
 	rm -rf build # only to deal with old style installs
+	rm -rf dist
 	rm -fr .env
 	rm -fr node_modules
 	rm -fr cover

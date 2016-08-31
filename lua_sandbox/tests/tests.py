@@ -1,35 +1,35 @@
 # -*- coding: utf-8 -*-
 
 import os
+import threading
 import time
 import unittest
 
-from lua_sandbox.executor import SimpleSandboxedExecutor
 from lua_sandbox.executor import LuaException
+from lua_sandbox.executor import LuaInvariantException
 from lua_sandbox.executor import LuaOutOfMemoryException
+from lua_sandbox.executor import LuaSyntaxError
+from lua_sandbox.executor import SimpleSandboxedExecutor
+from lua_sandbox.executor import check_stack
 
 
 class TestLuaExecution(unittest.TestCase):
-    def setUp(self):
-        self.ex = SimpleSandboxedExecutor(max_runtime=1000*1000)
+    def setUp(self, *a, **kw):
+        self.ex = SimpleSandboxedExecutor(name=self.id())
 
     def test_basics1(self):
         program = """
             return 1
         """
-        self.assertEqual(self.ex._stack_top(), 0)
         self.assertEqual(self.ex.execute(program, {}),
                          (1.0,))
-        self.assertEqual(self.ex._stack_top(), 0)
 
     def test_basics2(self):
         program = """
             return a, b, a+b
         """
-        self.assertEqual(self.ex._stack_top(), 0)
         self.assertEqual(self.ex.execute(program, {'a': 1, 'b': 2}),
                          (1.0, 2.0, 3.0))
-        self.assertEqual(self.ex._stack_top(), 0)
 
     def test_basics3(self):
         program = """
@@ -39,14 +39,26 @@ class TestLuaExecution(unittest.TestCase):
             end
             return foo
         """
-        self.assertEqual(self.ex._stack_top(), 0)
         self.assertEqual(self.ex.execute(program, {}),
                          ({1.0: 1.0,
                            2.0: 2.0,
                            3.0: 3.0,
                            4.0: 4.0,
                            5.0: 5.0},))
-        self.assertEqual(self.ex._stack_top(), 0)
+
+    def test_check_stack(self):
+        # we rely on the @check_stack decorator a lot to detect stack leaks, so
+        # make sure it at least works
+        def _fn(executor):
+            executor.create_table()._bring_to_top(False)
+
+        with self.assertRaises(LuaException):
+            check_stack(0, 0)(_fn)(self.ex)
+
+    def test_parse_error(self):
+        program = "()code"
+        with self.assertRaises(LuaSyntaxError):
+            self.ex.load(program)
 
     def test_serialize_deserialize(self):
         program = """
@@ -82,7 +94,6 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(self.ex.execute(program,
                                    {'foo': input_data}),
                          (expected_output,))
-        self.assertEqual(self.ex._stack_top(), 0)
 
     def test_serialize_unicode(self):
         program = """
@@ -97,37 +108,28 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(self.ex.execute(program,
                                    {'data': input_data}),
                          ({english: chinese.encode('utf8')},))
-        self.assertEqual(self.ex._stack_top(), 0)
-
 
     def test_no_weird_python_types(self):
         program = """
             return foo
         """
-        self.assertEqual(self.ex._stack_top(), 0)
 
         with self.assertRaises(TypeError):
             self.ex.execute(program, {'foo': object()})
-        self.assertEqual(self.ex._stack_top(), 0)
 
-        with self.assertRaises(TypeError):
-            self.ex.execute(program, {'foo': set()})
-        self.assertEqual(self.ex._stack_top(), 0)
-
-        with self.assertRaises(TypeError):
-            self.ex.execute(program, {'foo': set(), 'bar': 'baz'})
-        self.assertEqual(self.ex._stack_top(), 0)
-
-        with self.assertRaises(TypeError):
-            self.ex.execute(program, {'foo': [1, 2, 3, 4, set()]})
-        self.assertEqual(self.ex._stack_top(), 0)
-
-        with self.assertRaises(LuaException):
+        with self.assertRaises(ValueError):
             # recursive structure
             d = {}
             d['foo'] = d
             self.ex.execute(program, {'foo': d})
-        self.assertEqual(self.ex._stack_top(), 0)
+
+    def test_function_noargs(self):
+        program = """
+            return foo()
+        """
+        ret = self.ex.execute(program, {'foo': lambda: 5})
+
+        self.assertEqual((5.0,), ret)
 
     def test_function_passing(self):
         closed = []
@@ -140,14 +142,12 @@ class TestLuaExecution(unittest.TestCase):
             a = 1+3
             return foo(2, 3)
         """
-        self.assertEqual(self.ex._stack_top(), 0)
         ret = self.ex.execute(program, {'foo': closure})
-        self.assertEqual(self.ex._stack_top(), 0)
 
         self.assertEqual(({1.0: 8.0, 2.0: 9.0},), ret)
         self.assertEqual([2.0, 3.0], closed)
 
-    def test_method_messing(self):
+    def test_method_passing(self):
         class MyObject(object):
             def double(self, x):
                 return x*2
@@ -172,44 +172,6 @@ class TestLuaExecution(unittest.TestCase):
         else:
             self.assertTrue(False)
 
-    def test_no_weird_lua_types(self):
-        def _tester(program, args={}):
-            program = """
-                return function() return 5 end
-            """
-            with self.assertRaises(LuaException):
-                self.assertEqual(self.ex._stack_top(), 0)
-                self.ex.execute(program, {})
-                self.assertEqual(self.ex._stack_top(), 0)
-
-        _tester("""
-            return 1, function() return 5 end
-        """)
-
-        _tester("""
-            return 1, {5, function() return 5 end}
-        """)
-
-        _tester("""
-            return {5, {}, function() return 5 end}}
-        """)
-
-        _tester("""
-            return {5, function() return 5 end}}
-        """)
-
-        _tester("""
-            return {5, 6, {7, function() return 5 end}}}}
-        """)
-
-        _tester("""
-            -- recursive structure
-            f = {}
-            f.f = f
-            return f
-        """)
-
-
     def test_assertions(self):
         program = """
             assert(false)
@@ -223,10 +185,39 @@ class TestLuaExecution(unittest.TestCase):
         with self.assertRaises(LuaException):
             self.ex.execute(program)
 
+    def test_setitem(self):
+        program = "return x"
+
+        # round trip
+        self.ex['x'] = 5
+        self.assertEqual(self.ex['x'].to_python(), 5.0)
+
+        # nils
+        self.assertEqual(self.ex['bar'].type_name(), 'nil')
+        self.assertEqual(self.ex['bar'].to_python(), None)
+
+        # loaded code can get to it
+        loaded = self.ex.load(program)
+        returns = [x.to_python() for x in loaded()]
+        self.assertEqual(returns, [5.0])
+
+    def test_createtable(self):
+        t = self.ex.create_table()
+        t['foo'] = 5
+        self.assertEquals(t['foo'].to_python(), 5.0)
+        self.assertEquals(t['bar'].type_name(), 'nil')
+        self.assertEquals(t['bar'].to_python(), None)
+        self.assertTrue(t['bar'].is_nil())
+
+        with self.assertRaises(TypeError):
+            x = t['foo']['bar']
+
+        with self.assertRaises(TypeError):
+            t['foo']['bar'] = 5
+
 
 class TestSafeguards(TestLuaExecution):
     def test_memory(self):
-
         def _tester(program):
             start_time = time.time()
             with self.assertRaises(LuaOutOfMemoryException):
@@ -245,8 +236,9 @@ class TestSafeguards(TestLuaExecution):
         def _tester(program):
             start_time = time.time()
             with self.assertRaises(LuaException):
-                self.ex.execute(program)
-            self.assertLess(time.time()-start_time, 1.1)
+                with self.ex.limit_runtime(0.5):
+                    self.ex.execute(program)
+            self.assertLess(time.time()-start_time, 0.7)
 
         _tester("""
             foo = {}
@@ -254,6 +246,10 @@ class TestSafeguards(TestLuaExecution):
             end
             return 1
         """)
+
+        with self.ex.limit_runtime(1.0):
+            # make sure the limiter doesn't just always trigger
+            self.ex.execute("return 5")
 
     def test_no_print(self):
         # make sure we didn't pass any libraries to the client program
@@ -287,40 +283,28 @@ class TestSafeguards(TestLuaExecution):
         """
         self.ex.execute(program, {'foo': 0})
 
-    def test__get_lua(self):
-        self.assertTrue(self.ex._get_lua())
 
+class TestReusingExecutor(TestLuaExecution):
+    def __init__(self, *a, **kw):
+        unittest.TestCase.__init__(self, *a, **kw)
+        self.ex = SimpleSandboxedExecutor()
 
-class TestLuaSandboxedExecutor(TestLuaExecution):
-    def test_stack_normal(self):
-        for x in range(5):
-            self.assertEqual(self.ex._stack_top(), 0)
-
-            program = """
-            return 20
-            """
-            self.assertEqual(self.ex.execute(program, {}), (20.0,))
-
-            self.assertEqual(self.ex._stack_top(), 0)
-
-    def test_stack_error(self):
-        ex = SimpleSandboxedExecutor()
-
-        for x in range(5):
-            self.assertEqual(ex._stack_top(), 0)
-
-            program = """
-            error("oh noes")
-            """
-            with self.assertRaises(LuaException):
-                ex.execute(program, {})
-
-            self.assertEqual(ex._stack_top(), 0)
-
+    def setUp(self):
+        pass
 
 if __name__ == '__main__':
     if os.environ.get('LEAKTEST', False):
         while True:
-            unittest.main(verbosity=0, exit=False)
+            threads = []
+            for _ in range(10):
+                def _fn():
+                    for _ in range(100):
+                        unittest.main(verbosity=0, exit=False)
+                t = threading.Thread(target=_fn)
+                t.daemon = True
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
     else:
         unittest.main()

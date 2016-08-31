@@ -190,6 +190,8 @@ void store_python_callable(lua_State *L,
     python_callable* freeable =
         (python_callable*)lua_newuserdata(L, sizeof(python_callable));
 
+    // we don't hold the GIL so we can't do anything but store pointers
+
     freeable->executor = executor;
     freeable->callable = callable;
     freeable->val = val;

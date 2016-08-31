@@ -7,13 +7,11 @@ import ctypes
 from lua_sandbox import _executor
 from lua_sandbox.utils import datafile
 
-# TODO
-# lua_lib_location = find_library(_executor.LUA_LIB_NAME)
-lua_lib_location = '/opt/local/lib/liblua.dylib'
+lua_lib_location = find_library(_executor.LUA_LIB_NAME)
 lua_lib = ctypes.CDLL(lua_lib_location)
 
 if not lua_lib_location or not lua_lib.lua_newstate:
-    raise Exception("unable to locate lua")
+    raise Exception("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
 
 # we talk to executor in two ways: as a Python module and as a ctypes module
 executor_lib_location = find_library('_executor')
@@ -31,6 +29,17 @@ else:
                     % _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME)
 
 # dylib exports
+luaL_loadbufferx = lua_lib.luaL_loadbufferx
+luaL_newmetatable = lua_lib.luaL_newmetatable
+luaL_newmetatable.restype = ctypes.c_int
+luaL_openlibs = lua_lib.luaL_openlibs
+luaL_openlibs.restype = None
+luaL_ref = lua_lib.luaL_ref
+luaL_ref.restype = ctypes.c_int
+luaL_setmetatable = lua_lib.luaL_setmetatable
+luaL_setmetatable.restype = None
+luaL_unref = lua_lib.luaL_unref
+luaL_unref.restype = ctypes.c_int
 lua_checkstack = lua_lib.lua_checkstack
 lua_checkstack.restype = ctypes.c_int
 lua_close = lua_lib.lua_close
@@ -43,8 +52,6 @@ lua_getfield = lua_lib.lua_getfield
 lua_getfield.restype = None
 lua_getglobal = lua_lib.lua_getglobal
 lua_getglobal.restype = None
-lua_gettable = lua_lib.lua_gettable
-lua_gettable.restype = None
 lua_gettop = lua_lib.lua_gettop
 lua_gettop.restype = ctypes.c_int
 lua_newstate = lua_lib.lua_newstate
@@ -69,6 +76,8 @@ lua_rawget = lua_lib.lua_rawget
 lua_rawget.restype = None
 lua_rawgeti = lua_lib.lua_rawgeti
 lua_rawgeti.restype = None
+lua_rawset = lua_lib.lua_rawset
+lua_rawset.restype = None
 lua_rawseti = lua_lib.lua_rawseti
 lua_rawseti.restype = None
 lua_setfield = lua_lib.lua_setfield
@@ -76,8 +85,6 @@ lua_setfield.restype = ctypes.c_int
 lua_setglobal = lua_lib.lua_setglobal
 lua_setglobal.restype = None
 lua_sethook = lua_lib.lua_sethook
-lua_settable = lua_lib.lua_settable
-lua_settable.restype = None
 lua_settop = lua_lib.lua_settop
 lua_settop.restype = None
 lua_toboolean = lua_lib.lua_toboolean
@@ -88,28 +95,21 @@ lua_tonumberx.restype = lua_number_type
 lua_type = lua_lib.lua_type
 lua_typename = lua_lib.lua_typename
 lua_typename.restype = ctypes.c_char_p
-luaL_loadbufferx = lua_lib.luaL_loadbufferx
-luaL_newmetatable = lua_lib.luaL_newmetatable
-luaL_newmetatable.restype = ctypes.c_int
-luaL_openlibs = lua_lib.luaL_openlibs
-luaL_openlibs.restype = None
-luaL_ref = lua_lib.luaL_ref
-luaL_ref.restype = ctypes.c_int
-luaL_setmetatable = lua_lib.luaL_setmetatable
-luaL_setmetatable.restype = None
-luaL_unref = lua_lib.luaL_unref
-luaL_unref.restype = ctypes.c_int
+
 
 # mirrored in _executormodule.h
-class Limiter(ctypes.Structure):
+class MemoryLimiter(ctypes.Structure):
     _fields_ = [
         ("limit_allocation", ctypes.c_int),
         ("memory_used", ctypes.c_size_t),
         ("memory_limit", ctypes.c_size_t),
     ]
 
-EXECUTOR_LUA_CALLABLE_KEY = ctypes.c_char_p.in_dll(executor_lib, "EXECUTOR_LUA_CALLABLE_KEY")
-EXECUTOR_MEMORY_LIMITER_KEY = ctypes.c_void_p.in_dll(executor_lib, "EXECUTOR_MEMORY_LIMITER_KEY")
+
+EXECUTOR_LUA_CALLABLE_KEY = ctypes.c_char_p.in_dll(executor_lib,
+    "EXECUTOR_LUA_CALLABLE_KEY")
+EXECUTOR_MEMORY_LIMITER_KEY = ctypes.c_void_p.in_dll(executor_lib,
+    "EXECUTOR_MEMORY_LIMITER_KEY")
 executor_call_python_function_from_lua = executor_lib.call_python_function_from_lua
 executor_free_python_callable = executor_lib.free_python_callable
 executor_free_runtime_limiter = executor_lib.free_runtime_limiter
@@ -127,14 +127,8 @@ lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 
 
 # TODO
-# audit for gettable/settable/etc stuff that can trigger metamethods that could
-#   overun memory or cycle time
-# audit for where longjmp will hurt us the most
-# ctypes releases the GIL for all of these calls, but we really only need to
-#   release it for lua_pcallk
-# anything that mixes Python code with stack manipulation needs exception
-#   handlers to fix the stack afterwards
 # some comments, incl. stack and longjmp stuff
+# some comments on the cycle detection stuff
 
 # this is normally a macro from lua.h
 def lua_pop(L, n):
@@ -205,7 +199,7 @@ class Lua(object):
         self.name = name or str(id(self))
 
         # n.b. this is global across the whole VM
-        self.memory_limiter = Limiter(
+        self.memory_limiter = MemoryLimiter(
             limit_allocation=0,
             memory_limit=max_memory,
             memory_used=0
@@ -236,14 +230,15 @@ class Lua(object):
     def install_memory_limiter(self):
         lua_pushstring(self.L, EXECUTOR_MEMORY_LIMITER_KEY)
         lua_pushlightuserdata(self.L, ctypes.pointer(self.memory_limiter))
-        lua_settable(self.L, _executor.LUA_REGISTRYINDEX)
+        lua_rawset(self.L, _executor.LUA_REGISTRYINDEX)
 
     @contextlib.contextmanager
     def limit_runtime(self,
                       max_runtime=MAX_RUNTIME_DEFAULT,
                       max_runtime_hz=MAX_RUNTIME_HZ_DEFAULT):
 
-        limiter = executor_new_runtime_limiter(self.L, ctypes.c_double(max_runtime))
+        limiter = executor_new_runtime_limiter(self.L,
+                                               ctypes.c_double(max_runtime))
         limiter = ctypes.c_void_p(limiter)
 
         try:
@@ -469,13 +464,12 @@ class LuaValue(object):
 
     @check_stack(1)
     def __call__(self, *args):
-        # NOTE!!!
-        # lua does a longjmp back to the lua_pcallk call site if anything goes
-        # wrong. Because of that, Python's exception handling (including finally
-        # clauses!) will *not* be triggered. This can cause us to leak memory,
-        # not release/reacquire the GIL and all sorts of craziness. Because of
-        # this, the actual call site is in _executormodule.c who can better deal
-        # with that stuff
+        # NOTE!!! lua does a longjmp back to the lua_pcallk call site if
+        # anything goes wrong. Because of that, Python's exception handling
+        # (including finally clauses!) will *not* be triggered. This can cause
+        # us to leak memory, not release/reacquire the GIL and all sorts of
+        # craziness. Because of this, the actual call site is in
+        # _executormodule.c who can better deal with that stuff
 
         self._bring_to_top(False)  # lua_pcallk consumes
 
@@ -542,12 +536,13 @@ class LuaValue(object):
             kind = lua_type(self.L, -1)
 
             if kind != _executor.LUA_TTABLE:
-                raise TypeError("can only index tables, not %r" % (self.type_name(),))
+                raise TypeError("can only index tables, not %r"
+                                % (self.type_name(),))
 
             key._bring_to_top(False)
 
             # now the table is at -2 and the key is at -1
-            lua_gettable(self.L, -2)
+            lua_rawget(self.L, -2)
 
             # now the table is at -2 and the value is at -1
             ret = LuaValue(self.executor)
@@ -563,13 +558,14 @@ class LuaValue(object):
         with self._bring_to_top():
             kind = lua_type(self.L, -1)
             if kind != _executor.LUA_TTABLE:
-                raise TypeError("can only index tables, not %r" % (self.type_name(),))
+                raise TypeError("can only index tables, not %r"
+                                % (self.type_name(),))
 
             key._bring_to_top(False)
             value._bring_to_top(False)
 
             # consumes the key and the value, leaving the table
-            lua_settable(self.L, -3)
+            lua_rawset(self.L, -3)
 
     @check_stack(1, 0)
     def is_nil(self):
@@ -587,9 +583,11 @@ class LuaValue(object):
 
     @classmethod
     def from_python(cls, executor, val, recursion=0, max_recursion=10):
-        # weird argument rearranging to make @check_stack and copy paste easier
+        # weird argument rearranging to make @check_stack and copy paste
+        # easier
         return cls._from_python(executor, cls, val,
-                                recursion=recursion, max_recursion=max_recursion)
+                                recursion=recursion,
+                                max_recursion=max_recursion)
 
     @staticmethod
     @check_stack(3, 0)
@@ -622,19 +620,23 @@ class LuaValue(object):
 
         elif isinstance(val, unicode):
             as_str = val.encode('utf8')
-            return cls.from_python(executor, as_str, max_recursion=max_recursion)
+            return cls.from_python(executor, as_str,
+                                   recursion=recursion+1,
+                                   max_recursion=max_recursion)
 
         elif isinstance(val, set):
             # sets are just tables with True as the value
             as_dict = {k: True for k in val}
-            return cls.from_python(executor, as_dict, max_recursion=max_recursion)
+            return cls.from_python(executor, as_dict,
+                                   recursion=recursion+1,
+                                   max_recursion=max_recursion)
 
         elif isinstance(val, dict):
             lua_createtable(self.L, 0, len(val))
 
             for k, v in val.iteritems():
-                # TODO this works but it creates a lot of overhead because it
-                # makes a lot of round trips through the registry table. we can
+                # this works but it creates a lot of overhead because it makes
+                # a lot of round trips through the registry table. we can
                 # probably make this faster by making this function more
                 # directly recursive
 
@@ -654,7 +656,7 @@ class LuaValue(object):
                 key._bring_to_top(False)
                 value._bring_to_top(False)
                 # -3 because value is -1, key is -2, so the table must be -3
-                lua_settable(self.L, -3)
+                lua_rawset(self.L, -3)
 
                 # that consumes the key and value, leaving the table
 
@@ -667,7 +669,7 @@ class LuaValue(object):
             lua_createtable(self.L, len(val), 0)
 
             for i, value in enumerate(val, 1):
-                # TODO like for dict this could definitely be faster
+                # like for dict this could definitely be faster
 
                 try:
                     lvalue = cls.from_python(executor, value,
@@ -686,11 +688,7 @@ class LuaValue(object):
             return LuaValue(executor)
 
         elif callable(val):
-            # argument handing/serialisation is much easier in Python than in
-            # C so we make a Python function wrapping the real function with
-            # one that takes 0 arguments build our userdata
-            wrapped = val # partial(cls.callable_wrapper, executor, val)
-            wrapped_id = id(wrapped)
+            val_id = id(val)
 
             # fiddling with pointers is easier in C (leaves the userdata on
             # the stack)
@@ -698,16 +696,16 @@ class LuaValue(object):
                                            ctypes.py_object(executor),
                                            ctypes.py_object(_callable_wrapper),
                                            ctypes.py_object(val),
-                                           ctypes.c_long(wrapped_id),
+                                           ctypes.c_long(val_id),
                                            ctypes.py_object(executor.cycles))
 
-            # assign the metatable
+            # assign the metatable of the userdata
             luaL_setmetatable(self.L, EXECUTOR_LUA_CALLABLE_KEY)
 
             # consume the userdata with the metatable set
             return LuaValue(executor,
                             comment=repr(val),
-                            cycle_id=wrapped)
+                            cycle_id=val)
 
         raise TypeError("can't serialise %r" % (val,))
 
@@ -746,10 +744,10 @@ class LuaOutOfMemoryException(LuaException):
 
 class LuaStateException(LuaException):
     def __init__(self, executor):
-        # there's currently an error on the top of the Lua stack so extract it,
-        # turn it into a Python exception, and raise it. Here we don't return
-        # the LuaValue version because it's very possible that we're throwing
-        # away the L now and don't need to hold on it anymore
+        # there's currently an error on the top of the Lua stack so extract
+        # it, turn it into a Python exception, and raise it. Here we don't
+        # return the LuaValue version because it's very possible that we're
+        # throwing away the L now and don't need to hold on it anymore
         err_string_len = ctypes.c_size_t(0)
         err_string = lua_tolstring(executor.L, -1, ctypes.byref(err_string_len))
 

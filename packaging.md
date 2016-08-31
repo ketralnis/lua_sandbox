@@ -4,7 +4,7 @@ On a suitable trusty VM, install the packages (the Vagrant VM does this for
 you)
 
 ```shell
-sudo apt-get install python-stdeb fakeroot python-all dput devscripts
+sudo apt-get install python-stdeb fakeroot python-all dput devscripts python-all-dev
 ```
 
 This will allow use of the [stdeb tool](https://github.com/astraw/stdeb/) for

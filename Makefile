@@ -35,9 +35,9 @@ clean:
 	find lua_sandbox -type f -name \*.pyc -delete -print
 
 distclean: clean
-	rm -rf build # only to deal with old style installs
+	rm -rf build
 	rm -rf dist
 	rm -fr .env
-	rm -fr node_modules
 	rm -fr cover
 	rm -fr lua_sandbox.egg-info
+	rm -fr deb_dist

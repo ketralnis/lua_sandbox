@@ -11,7 +11,8 @@ apt-get -y install python python-pip python-dev liblua5.2-dev
 
 # I use this VM for packaging too so add that stuff in while we're at it. you
 # can comment it out if it slows stuff down for you a lot
-apt-get -y install python-stdeb fakeroot python-all dput devscripts
+apt-get -y install python-stdeb fakeroot python-all dput devscripts git \
+    python-all-dev gnupg
 
 cd /home/vagrant/lua_sandbox
 ./setup.py develop

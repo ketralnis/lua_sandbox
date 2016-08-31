@@ -42,7 +42,7 @@ _executor = Extension('lua_sandbox._executor',
 
 setup(
     name='lua_sandbox',
-    version='2.0.0',
+    version='2.0.1',
     description='A library to run lua code inside of a sandbox from Python',
     author='David King',
     author_email='dking@ketralnis.com',

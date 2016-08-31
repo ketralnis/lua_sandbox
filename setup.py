@@ -15,12 +15,12 @@ if os.path.exists(BUILDCONF):
     sys.stderr.write("building with %s\n" % (BUILDCONF,))
     with open(BUILDCONF) as f:
         build_config.update(json.loads(f.read()))
-else:
-    sys.stderr.write("couldn't find %s\n" % (BUILDCONF,))
 
-LUA_LIB_NAME = build_config.get('lua_lib_name', 'lua')
-INCLUDE_DIRS = build_config.get('include_dirs', ["/usr/include"])
-LIBRARY_DIRS = build_config.get('library_dirs', ["/usr/lib"])
+# these defaults are for Ubuntu trusty's liblua5.2-dev package install
+# locations, but you can override them with a build.conf
+LUA_LIB_NAME = build_config.get('lua_lib_name', 'lua5.2')
+INCLUDE_DIRS = build_config.get('include_dirs', ["/usr/include/lua5.2"])
+LIBRARY_DIRS = build_config.get('library_dirs', [])
 EXTRA_COMPILE_ARGS = build_config.get('extra_compile_args', ["-g"])
 EXTRA_LINK_ARGS = build_config.get('extra_link_args', [])
 

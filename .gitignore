@@ -11,3 +11,4 @@ build.conf
 lua_sandbox.egg-info
 lua_sandbox/_executor.so
 deb_dist
+.vagrant

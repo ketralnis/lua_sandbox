@@ -5,7 +5,7 @@ import contextlib
 import ctypes
 
 from lua_sandbox import _executor
-from lua_sandbox.utils import datafile
+from lua_sandbox.utils import datafile, dataloc
 
 lua_lib_location = find_library(_executor.LUA_LIB_NAME)
 lua_lib = ctypes.CDLL(lua_lib_location)
@@ -14,7 +14,7 @@ if not lua_lib_location or not lua_lib.lua_newstate:
     raise Exception("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
 
 # we talk to executor in two ways: as a Python module and as a ctypes module
-executor_lib_location = find_library('_executor')
+executor_lib_location = dataloc('_executor.so')
 executor_lib = ctypes.CDLL(executor_lib_location)
 
 if not executor_lib or not executor_lib.l_alloc_restricted:

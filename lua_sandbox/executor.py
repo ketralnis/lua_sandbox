@@ -126,10 +126,6 @@ executor_time_limiting_hook.restype = ctypes.c_void_p
 lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 
 
-# TODO
-# some comments, incl. stack and longjmp stuff
-# some comments on the cycle detection stuff
-
 # this is normally a macro from lua.h
 def lua_pop(L, n):
     return lua_settop(L, -(n)-1)
@@ -216,6 +212,18 @@ class Lua(object):
         self.install_memory_limiter()
         self.install_python_callable()
 
+        # If every time we hold a reference in Lua land to an object in Python
+        # land we do the obvious incref/decref pair we end up with reference
+        # cycles which prevent those objects from ever getting cleaned up
+        # resulting in terrible memory leaks. So instead we use a combination
+        # of Lua refs and the registry and this dictionary of references. When
+        # we create a reference to a Python object, we add it to this
+        # dictionary. Then when Lua removes its last references, the __gc
+        # method calls back into Python to remove it from this dictionary.
+        # This way we allow Python's cycle-detecting GC full access to
+        # something that more closely resembles the actual object graph. lupa
+        # uses the same technique
+        # https://github.com/scoder/lupa/commit/c634e44d77a17adcf99a562284da76a5a40065a4
         self.cycles = {}
 
         # hold on to this for __del__
@@ -480,7 +488,7 @@ class LuaValue(object):
 
         try:
             lua_args = map(lambda x: LuaValue.from_python(self, x), args)
-        except TypeError:
+        except Exception:
             # get ourselves off of the stack
             lua_pop(self.L, 1)
             raise

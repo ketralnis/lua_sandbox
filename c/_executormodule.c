@@ -134,6 +134,7 @@ int call_python_function_from_lua(lua_State *L) {
         PyObject *ptype=NULL, *pvalue=NULL, *ptraceback=NULL;
         PyErr_Fetch(&ptype, &pvalue, &ptraceback);
         PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
+        PyErr_Clear();
 
         char* error_message = "unknown error executing Python code";
 
@@ -152,7 +153,6 @@ int call_python_function_from_lua(lua_State *L) {
 
         lua_pushstring(L, error_message);
 
-        PyErr_Clear();
         Py_XDECREF(repr);
         Py_XDECREF(ptype);
         Py_XDECREF(pvalue);
@@ -174,6 +174,7 @@ int call_python_function_from_lua(lua_State *L) {
 
         PyGILState_Release(gstate);
         limiter->limit_allocation = 1;
+
         return 1; // one return value that the wrapper left on the stack
     }
 }

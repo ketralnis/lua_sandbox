@@ -87,6 +87,8 @@ lua_setglobal.restype = None
 lua_sethook = lua_lib.lua_sethook
 lua_settop = lua_lib.lua_settop
 lua_settop.restype = None
+lua_setupvalue = lua_lib.lua_setupvalue
+lua_setupvalue.restype = ctypes.c_void_p # this isn't true but we never use it
 lua_toboolean = lua_lib.lua_toboolean
 lua_tolstring = lua_lib.lua_tolstring
 lua_tolstring.restype = ctypes.c_char_p
@@ -296,8 +298,8 @@ class Lua(object):
         if not isinstance(key, str):
             raise TypeError("key must be str, not %r" % (key,))
 
-        value = LuaValue.from_python(self, value)
-        value._bring_to_top(False)
+        lvalue = LuaValue.from_python(self, value)
+        lvalue._bring_to_top(False)
         lua_setglobal(self.L, key)
 
     def __setitem__(self, key, value):
@@ -450,8 +452,12 @@ class LuaValue(object):
                     break
 
                 # `key' is at index -2 and `value' at index -1
-                value = self._to_python(-1)
-                key = self._to_python(-2)
+                try:
+                    value = self._to_python(-1)
+                    key = self._to_python(-2)
+                except Exception:
+                    lua_pop(self.L, 2)
+                    raise
 
                 ret[key] = value
 
@@ -608,7 +614,7 @@ class LuaValue(object):
 
         if isinstance(val, LuaValue):
             # it's already a Lua value
-            return self
+            return val
 
         elif val is None:
             lua_pushnil(self.L)
@@ -772,24 +778,50 @@ class LuaSyntaxError(LuaStateException):
     pass
 
 
-class SimpleSandboxedExecutor(Lua):
-    sandboxer = datafile("lua_utils/safe_sandbox.lua")
+# make this available to importers
+SANDBOXER = datafile("lua_utils/safe_sandbox.lua")
 
-    def _stack_top(self):
-        return lua_gettop(self.L)
 
-    @check_stack(0, 0)
-    def execute(self, code, env=None, desc=None, libs=()):
-        self['env'] = env
-        self['code'] = [code]
-        self['desc'] = desc
-        self['libs'] = libs
+class SandboxedExecutor(Lua):
+    def __init__(self,
+                 name=None,
+                 sandboxer=SANDBOXER,
+                 libs=(),
+                 env=None,
+                 **kw):
+        # bring up the VM
+        super(SandboxedExecutor, self).__init__(**kw)
 
-        loaded = self.load(self.sandboxer)
-        as_list_of_luas = loaded()
-        as_list_of_pythons = [x.to_python() for x in as_list_of_luas]
-        as_tuple = tuple(as_list_of_pythons)
+        loaded_sandboxer = self.load(
+            sandboxer,
+            desc='%s.sandboxer' % self.name)
 
-        self['env'] = self['code'] = self['desc'] = self['libs'] = None
+        self.sandbox = loaded_sandboxer()[0]
 
-        return as_tuple
+        # now that the env is built, build the libs in that env too
+        for i, lib in enumerate(libs, 1):
+            loaded_lib = self.sandboxed_load(
+                lib,
+                desc = "%s.libs[%d]" % (self.name, i))
+            loaded_lib()
+
+        # any additional envs they want available
+        if env:
+            for k, v in env.items():
+                self.sandbox[k] = v
+
+    @check_stack(2, 0)
+    def sandboxed_load(self, *a, **kw):
+        # TODO this works on 5.2 but if we want to support luajit we'll need a
+        # version that uses setfenv too
+
+        loaded = super(SandboxedExecutor, self).load(*a, **kw)
+        with loaded._bring_to_top():
+            self.sandbox._bring_to_top(False)
+            # this seems really magical but it it replaces the _ENV variable for
+            # this chunk
+            ret = lua_setupvalue(self.L, -2, 1)
+        assert ret is not None
+
+        return loaded
+

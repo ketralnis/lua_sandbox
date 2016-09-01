@@ -8,7 +8,7 @@ set -e
 function confirm_or_die() {
     echo "$1"
 
-    read -p '[y/n] ' -sn1 r
+    read -p '[y/n] g' -sn1 r
     echo ''
 
     if [ "$r" = "y" ]; then

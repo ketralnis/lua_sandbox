@@ -9,8 +9,20 @@ from lua_sandbox.executor import LuaException
 from lua_sandbox.executor import LuaInvariantException
 from lua_sandbox.executor import LuaOutOfMemoryException
 from lua_sandbox.executor import LuaSyntaxError
-from lua_sandbox.executor import SimpleSandboxedExecutor
+from lua_sandbox.executor import SandboxedExecutor
 from lua_sandbox.executor import check_stack
+
+
+class SimpleSandboxedExecutor(object):
+    def __init__(self, name=None):
+        self.lua = SandboxedExecutor(name=name)
+
+    def execute(self, program, env={}):
+        loaded = self.lua.sandboxed_load(program)
+        for k, v in env.items():
+            self.lua.sandbox[k] = v
+
+        return tuple(x.to_python() for x in loaded())
 
 
 class TestLuaExecution(unittest.TestCase):
@@ -53,12 +65,12 @@ class TestLuaExecution(unittest.TestCase):
             executor.create_table()._bring_to_top(False)
 
         with self.assertRaises(LuaException):
-            check_stack(0, 0)(_fn)(self.ex)
+            check_stack(0, 0)(_fn)(self.ex.lua)
 
     def test_parse_error(self):
         program = "()code"
         with self.assertRaises(LuaSyntaxError):
-            self.ex.load(program)
+            self.ex.lua.load(program)
 
     def test_serialize_deserialize(self):
         program = """
@@ -189,20 +201,20 @@ class TestLuaExecution(unittest.TestCase):
         program = "return x"
 
         # round trip
-        self.ex['x'] = 5
-        self.assertEqual(self.ex['x'].to_python(), 5.0)
+        self.ex.lua['x'] = 5
+        self.assertEqual(self.ex.lua['x'].to_python(), 5.0)
 
         # nils
-        self.assertEqual(self.ex['bar'].type_name(), 'nil')
-        self.assertEqual(self.ex['bar'].to_python(), None)
+        self.assertEqual(self.ex.lua['bar'].type_name(), 'nil')
+        self.assertEqual(self.ex.lua['bar'].to_python(), None)
 
         # loaded code can get to it
-        loaded = self.ex.load(program)
+        loaded = self.ex.lua.load(program)
         returns = [x.to_python() for x in loaded()]
         self.assertEqual(returns, [5.0])
 
     def test_createtable(self):
-        t = self.ex.create_table()
+        t = self.ex.lua.create_table()
         t['foo'] = 5
         self.assertEquals(t['foo'].to_python(), 5.0)
         self.assertEquals(t['bar'].type_name(), 'nil')
@@ -236,7 +248,7 @@ class TestSafeguards(TestLuaExecution):
         def _tester(program):
             start_time = time.time()
             with self.assertRaises(LuaException):
-                with self.ex.limit_runtime(0.5):
+                with self.ex.lua.limit_runtime(0.5):
                     self.ex.execute(program)
             self.assertLess(time.time()-start_time, 0.7)
 
@@ -247,7 +259,7 @@ class TestSafeguards(TestLuaExecution):
             return 1
         """)
 
-        with self.ex.limit_runtime(1.0):
+        with self.ex.lua.limit_runtime(1.0):
             # make sure the limiter doesn't just always trigger
             self.ex.execute("return 5")
 
@@ -291,6 +303,7 @@ class TestReusingExecutor(TestLuaExecution):
 
     def setUp(self):
         pass
+
 
 if __name__ == '__main__':
     if os.environ.get('LEAKTEST', False):

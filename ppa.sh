@@ -8,7 +8,7 @@ set -e
 function confirm_or_die() {
     echo "$1"
 
-    read -p '[y/n] g' -sn1 r
+    read -p '[y/n] ' -sn1 r
     echo ''
 
     if [ "$r" = "y" ]; then
@@ -42,8 +42,8 @@ if [ -z "$PPA" ]; then
     PPA="ppa:ketralnis/test-ppa"
 fi
 
-# confirm_or_die "building package by $AUTHOR is that you?" \
-#     'set $AUTHOR and try again'
+confirm_or_die "building package by $AUTHOR is that you?" \
+    'set $AUTHOR and try again'
 
 if ! gpg -K | fgrep "$AUTHOR"; then
     echo "gpg key for $AUTHOR not found in ~/.gnupg/secring.gpg"

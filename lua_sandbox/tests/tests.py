@@ -11,11 +11,12 @@ from lua_sandbox.executor import LuaOutOfMemoryException
 from lua_sandbox.executor import LuaSyntaxError
 from lua_sandbox.executor import SandboxedExecutor
 from lua_sandbox.executor import check_stack
+from lua_sandbox.executor import _executor
 
 
 class SimpleSandboxedExecutor(object):
-    def __init__(self, name=None):
-        self.lua = SandboxedExecutor(name=name)
+    def __init__(self, name=None, **kw):
+        self.lua = SandboxedExecutor(name=name, **kw)
 
     def execute(self, program, env={}):
         loaded = self.lua.sandboxed_load(program)
@@ -25,9 +26,16 @@ class SimpleSandboxedExecutor(object):
         return tuple(x.to_python() for x in loaded())
 
 
+def skip_if_luajit(fn):
+    if _executor.LUA_VERSION_NUM == 501:
+        return unittest.skip("unsupported on luajit")(fn)
+    return fn
+
+
 class TestLuaExecution(unittest.TestCase):
     def setUp(self, *a, **kw):
-        self.ex = SimpleSandboxedExecutor(name=self.id())
+        self.ex = SimpleSandboxedExecutor(name=self.id(),
+            max_memory=None)
 
     def test_basics1(self):
         program = """
@@ -229,6 +237,11 @@ class TestLuaExecution(unittest.TestCase):
 
 
 class TestSafeguards(TestLuaExecution):
+    def setUp(self, *a, **kw):
+        self.ex = SimpleSandboxedExecutor(name=self.id(),
+            max_memory=5*1024*1024)
+
+    @skip_if_luajit
     def test_memory(self):
         def _tester(program):
             start_time = time.time()
@@ -238,12 +251,13 @@ class TestSafeguards(TestLuaExecution):
 
         _tester("""
             foo = {}
-            while #foo < 50000000 do
+            while #foo < 500000000 do
                 foo[#foo+1] = 1
             end
             return 1
         """)
 
+    @skip_if_luajit
     def test_timeout(self):
         def _tester(program):
             start_time = time.time()

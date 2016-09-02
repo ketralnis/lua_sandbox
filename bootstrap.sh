@@ -6,8 +6,16 @@ set -ev
 
 apt-get update
 
+if [ -e /home/vagrant/lua_sandbox/build.conf ] && \
+    grep luajit /home/vagrant/lua_sandbox/build.conf
+then
+    USE_LUA_LIB=libluajit-5.1-dev
+else
+    USE_LUA_LIB=liblua5.2-dev
+fi
+
 # the basics required to get lua_sandbox compiling
-apt-get -y install python python-pip python-dev liblua5.2-dev
+apt-get -y install python python-pip python-dev $USE_LUA_LIB
 
 # I use this VM for packaging too so add that stuff in while we're at it. you
 # can comment it out if it slows stuff down for you a lot

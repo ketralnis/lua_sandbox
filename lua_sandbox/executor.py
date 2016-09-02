@@ -11,33 +11,33 @@ lua_lib_location = find_library(_executor.LUA_LIB_NAME)
 lua_lib = ctypes.CDLL(lua_lib_location)
 
 if not lua_lib_location or not lua_lib.lua_newstate:
-    raise Exception("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
+    raise ImportError("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
 
 # we talk to executor in two ways: as a Python module and as a ctypes module
 executor_lib_location = dataloc('_executor.so')
 executor_lib = ctypes.CDLL(executor_lib_location)
 
 if not executor_lib or not executor_lib.l_alloc_restricted:
-    raise Exception("unable to locate executor")
+    raise ImportError("unable to locate executor")
 
 if _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME == 'double':
     lua_number_type = ctypes.c_double
 elif _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME == 'float':
     lua_number_type = ctypes.c_float
 else:
-    raise Exception("Unable to deal with lua configured with LUA_NUMBER=%s"
+    raise ImportError("Unable to deal with lua configured with LUA_NUMBER=%s"
                     % _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME)
 
 # dylib exports
 luaL_loadbufferx = lua_lib.luaL_loadbufferx
 luaL_newmetatable = lua_lib.luaL_newmetatable
 luaL_newmetatable.restype = ctypes.c_int
+luaL_newstate = lua_lib.luaL_newstate
+luaL_newstate.restype = ctypes.c_void_p
 luaL_openlibs = lua_lib.luaL_openlibs
 luaL_openlibs.restype = None
 luaL_ref = lua_lib.luaL_ref
 luaL_ref.restype = ctypes.c_int
-luaL_setmetatable = lua_lib.luaL_setmetatable
-luaL_setmetatable.restype = None
 luaL_unref = lua_lib.luaL_unref
 luaL_unref.restype = ctypes.c_int
 lua_checkstack = lua_lib.lua_checkstack
@@ -48,16 +48,17 @@ lua_createtable = lua_lib.lua_createtable
 lua_createtable.restype = None
 lua_gc = lua_lib.lua_gc
 lua_gc.restype = ctypes.c_int
+lua_getallocf = lua_lib.lua_getallocf
+lua_getallocf.restype = ctypes.c_void_p
 lua_getfield = lua_lib.lua_getfield
 lua_getfield.restype = None
-lua_getglobal = lua_lib.lua_getglobal
-lua_getglobal.restype = None
 lua_gettop = lua_lib.lua_gettop
 lua_gettop.restype = ctypes.c_int
 lua_newstate = lua_lib.lua_newstate
+lua_newstate = lua_lib.lua_newstate
+lua_newstate.restype = ctypes.c_void_p
 lua_newstate.restype = ctypes.c_void_p
 lua_next = lua_lib.lua_next
-lua_pcallk = lua_lib.lua_pcallk
 lua_pushboolean = lua_lib.lua_pushboolean
 lua_pushboolean.restype = None
 lua_pushcclosure = lua_lib.lua_pushcclosure
@@ -80,11 +81,13 @@ lua_rawset = lua_lib.lua_rawset
 lua_rawset.restype = None
 lua_rawseti = lua_lib.lua_rawseti
 lua_rawseti.restype = None
+lua_setallocf = lua_lib.lua_setallocf
+lua_setallocf.restype = None
 lua_setfield = lua_lib.lua_setfield
 lua_setfield.restype = ctypes.c_int
-lua_setglobal = lua_lib.lua_setglobal
-lua_setglobal.restype = None
 lua_sethook = lua_lib.lua_sethook
+lua_setmetatable = lua_lib.lua_setmetatable
+lua_setmetatable.restype = None
 lua_settop = lua_lib.lua_settop
 lua_settop.restype = None
 lua_setupvalue = lua_lib.lua_setupvalue
@@ -92,20 +95,9 @@ lua_setupvalue.restype = ctypes.c_void_p # this isn't true but we never use it
 lua_toboolean = lua_lib.lua_toboolean
 lua_tolstring = lua_lib.lua_tolstring
 lua_tolstring.restype = ctypes.c_char_p
-lua_tonumberx = lua_lib.lua_tonumberx
-lua_tonumberx.restype = lua_number_type
 lua_type = lua_lib.lua_type
 lua_typename = lua_lib.lua_typename
 lua_typename.restype = ctypes.c_char_p
-
-
-# mirrored in _executormodule.h
-class MemoryLimiter(ctypes.Structure):
-    _fields_ = [
-        ("limit_allocation", ctypes.c_int),
-        ("memory_used", ctypes.c_size_t),
-        ("memory_limit", ctypes.c_size_t),
-    ]
 
 
 EXECUTOR_LUA_CALLABLE_KEY = ctypes.c_char_p.in_dll(executor_lib,
@@ -123,6 +115,15 @@ executor_store_python_callable = executor_lib.store_python_callable
 executor_store_python_callable.restype = None
 executor_time_limiting_hook = executor_lib.time_limiting_hook
 executor_time_limiting_hook.restype = ctypes.c_void_p
+executor_new_memory_limiter = executor_lib.new_memory_limiter
+executor_new_memory_limiter.restype = ctypes.c_void_p
+executor_free_memory_limiter = executor_lib.free_memory_limiter
+executor_free_memory_limiter.restype = ctypes.c_void_p
+executor_enable_limit_memory = executor_lib.enable_limit_memory
+executor_enable_limit_memory.restype = None
+executor_disable_limit_memory = executor_lib.disable_limit_memory
+executor_disable_limit_memory.restype = None
+
 
 # function types
 lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
@@ -135,6 +136,39 @@ def lua_pop(L, n):
 
 def luaL_getmetatable(L, n):
     return lua_getfield(L, _executor.LUA_REGISTRYINDEX, n)
+
+
+if _executor.LUA_VERSION_NUM == 501:
+    lua_pcall = lua_lib.lua_pcall
+    def lua_pcallk(L, nargs, nresults, _errfunc, _ctx, _k):
+        return lua_pcall(L, nargs, nresults, 0)
+
+    lua_tonumber = lua_lib.lua_tonumber
+    lua_tonumber.restype = lua_number_type
+    def lua_tonumberx(L, idx, _):
+        return lua_tonumber(L, idx, None)
+
+    lua_setfenv = lua_lib.lua_setfenv
+
+    def lua_getglobal(L, s):
+        return lua_getfield(L, _executor.LUA_GLOBALSINDEX, s)
+
+    def lua_setglobal(L, s):
+        return lua_setfield(L, _executor.LUA_GLOBALSINDEX, s)
+
+
+elif _executor.LUA_VERSION_NUM in (502, 503):
+    lua_pcallk = lua_lib.lua_pcallk
+    lua_tonumberx = lua_lib.lua_tonumberx
+    lua_tonumberx.restype = lua_number_type
+    lua_getglobal = lua_lib.lua_getglobal
+    lua_getglobal.restype = None
+    lua_setglobal = lua_lib.lua_setglobal
+    lua_setglobal.restype = None
+
+
+else:
+    raise ImportError("I don't know LUA_VERSION_NUM %r", _executor.LUA_VERSION_NUM)
 
 
 def abs_index(L, i, LUA_REGISTRYINDEX=_executor.LUA_REGISTRYINDEX):
@@ -194,24 +228,37 @@ class Lua(object):
     __slots__ = ['L', 'memory_limiter', 'cleanup_cache', 'name', 'cycles']
 
     def __init__(self, max_memory=MAX_MEMORY_DEFAULT, name=None):
-        self.name = name or str(id(self))
+        self.name = name or "%s[%s]" % (self.__class__.__name__, id(self))
 
-        # n.b. this is global across the whole VM
-        self.memory_limiter = MemoryLimiter(
-            limit_allocation=0,
-            memory_limit=max_memory,
-            memory_used=0
-        )
+        # build up the state according to the right version
+        if max_memory in (0, None):
+            # the easy case: they won't want memory limiting
+            self.L = luaL_newstate()
+            self.L = ctypes.c_void_p(self.L)  # save us casts later
+            self.memory_limiter = None
 
-        self.L = lua_newstate(executor_l_alloc_restricted,
-                              ctypes.pointer(self.memory_limiter))
-        if self.L == 0:
-            raise Exception("couldn't build lua_newstate")
-        self.L = ctypes.c_void_p(self.L)  # save us casts later
+        elif _executor.LUA_VERSION_NUM == 501:
+            # luajit
+            self.L = luaL_newstate()
+            self.L = ctypes.c_void_p(self.L)  # save us casts later
 
-        luaL_openlibs(self.L)
+            memory_limiter = executor_new_memory_limiter(self.L, max_memory)
+            self.memory_limiter = ctypes.c_void_p(memory_limiter)
+            lua_setallocf(self.L,
+                          executor_l_alloc_restricted,
+                          self.memory_limiter)
+
+        else:
+            # everything else
+            memory_limiter = executor_new_memory_limiter(None, max_memory)
+            self.memory_limiter = ctypes.c_void_p(memory_limiter)
+            self.L = lua_newstate(executor_l_alloc_restricted,
+                                  self.memory_limiter)
+            self.L = ctypes.c_void_p(self.L)  # save us casts later
 
         self.install_memory_limiter()
+
+        luaL_openlibs(self.L)
         self.install_python_callable()
 
         # If every time we hold a reference in Lua land to an object in Python
@@ -233,14 +280,19 @@ class Lua(object):
             lua_close = lua_close,
         )
 
-    def __repr__(self):
-        return "<%s %s>" % (self.__class__.__name__, self.name)
-
     @check_stack(2, 0)
     def install_memory_limiter(self):
+        # n.b. this is global across the whole VM
+
+        if not self.memory_limiter:
+            return
+
         lua_pushstring(self.L, EXECUTOR_MEMORY_LIMITER_KEY)
-        lua_pushlightuserdata(self.L, ctypes.pointer(self.memory_limiter))
+        lua_pushlightuserdata(self.L, self.memory_limiter)
         lua_rawset(self.L, _executor.LUA_REGISTRYINDEX)
+
+    def __repr__(self):
+        return "<%s %s>" % (self.__class__.__name__, self.name)
 
     @contextlib.contextmanager
     def limit_runtime(self,
@@ -249,12 +301,18 @@ class Lua(object):
 
         limiter = executor_new_runtime_limiter(self.L,
                                                ctypes.c_double(max_runtime))
+
+        if not limiter:
+            raise MemoryError("allocating runtime limiter")
+
         limiter = ctypes.c_void_p(limiter)
 
         try:
+            mask = _executor.LUA_MASKCOUNT
+
             lua_sethook(self.L,
                         executor_time_limiting_hook,
-                        _executor.LUA_MASKCOUNT,
+                        mask,
                         max_runtime_hz)
 
             yield
@@ -346,6 +404,7 @@ class Lua(object):
 
     def __del__(self):
         if self.L:
+            executor_free_memory_limiter(self.memory_limiter)
             self.cleanup_cache['lua_close'](self.L)
 
 
@@ -504,7 +563,7 @@ class LuaValue(object):
 
         # allocation limiting must only be turned on while we're operating
         # inside of a pcall, or Lua's crazy longjmp thing will kick in
-        self.executor.memory_limiter.limit_allocation = 1
+        executor_enable_limit_memory(self.executor.memory_limiter)
 
         # lua_pcallk will pop the function all of the arguments that we added,
         # whether or not it fails
@@ -512,7 +571,7 @@ class LuaValue(object):
                                len(lua_args), _executor.LUA_MULTRET,
                                0, 0, None)
 
-        self.executor.memory_limiter.limit_allocation = 0
+        executor_disable_limit_memory(self.executor.memory_limiter)
 
         if pcall_ret == _executor.LUA_OK:
             after_top = lua_gettop(self.L)
@@ -530,7 +589,7 @@ class LuaValue(object):
             raise LuaStateException(self.executor)
 
         elif pcall_ret == _executor.LUA_ERRMEM:
-            raise LuaOutOfMemoryException()
+            raise LuaOutOfMemoryException("__call__")
 
         else:
             raise LuaException("Unknown return value from lua_pcallk: %r"
@@ -714,7 +773,8 @@ class LuaValue(object):
                                            ctypes.py_object(executor.cycles))
 
             # assign the metatable of the userdata
-            luaL_setmetatable(self.L, EXECUTOR_LUA_CALLABLE_KEY)
+            lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CALLABLE_KEY)
+            lua_setmetatable(self.L, -2)
 
             # consume the userdata with the metatable set
             return LuaValue(executor,
@@ -812,16 +872,22 @@ class SandboxedExecutor(Lua):
 
     @check_stack(2, 0)
     def sandboxed_load(self, *a, **kw):
-        # TODO this works on 5.2 but if we want to support luajit we'll need a
-        # version that uses setfenv too
-
         loaded = super(SandboxedExecutor, self).load(*a, **kw)
+
         with loaded._bring_to_top():
             self.sandbox._bring_to_top(False)
-            # this seems really magical but it it replaces the _ENV variable for
-            # this chunk
-            ret = lua_setupvalue(self.L, -2, 1)
-        assert ret is not None
+
+            if _executor.LUA_VERSION_NUM == 501:
+                ret = lua_setfenv(self.L, -2)
+                if ret != 1:
+                    raise LuaException("couldn't setfenv?")
+
+            else:
+                # this seems really magical but it it replaces the _ENV
+                # variable for this chunk (then pops the value)
+                ret = lua_setupvalue(self.L, -2, 1)
+                if ret is None:
+                    raise LuaException("couldn't set upvalue?")
 
         return loaded
 

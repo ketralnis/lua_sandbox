@@ -1,0 +1,4 @@
+{
+  "lua_lib_name": "luajit-5.1",
+  "include_dirs": ["/usr/include/luajit-2.0"]
+}

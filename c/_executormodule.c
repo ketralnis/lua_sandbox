@@ -71,8 +71,41 @@ void free_runtime_limiter(lua_State *L, l_runtime_limiter* runtime_limiter) {
 }
 
 
+l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory) {
+
+#if LUA_VERSION_NUM == 501
+    void* old_ud = NULL;
+    lua_Alloc old_allocf = lua_getallocf(L, &old_ud);
+#endif
+
+    l_alloc_limiter* limiter = malloc(sizeof(l_alloc_limiter));
+
+    if(limiter == NULL) {
+        return NULL;
+    }
+
+#if LUA_VERSION_NUM == 501
+    limiter->old_ud = old_ud;
+    limiter->old_allocf = old_allocf;
+#endif
+
+    limiter->memory_limit = max_memory;
+    limiter->memory_used = 0;
+    limiter->limit_allocation = 0;
+
+    return limiter;
+}
+
+
+void free_memory_limiter(l_alloc_limiter* limiter) {
+    free(limiter);
+}
+
+
 void* l_alloc_restricted (l_alloc_limiter* limiter,
-                          void *ptr, size_t oldsize, size_t newsize) {
+                          void *ptr, size_t o_oldsize, size_t newsize) {
+    size_t oldsize = o_oldsize;
+
     if(ptr == NULL) {
         /*
          * <http://www.lua.org/manual/5.2/manual.html#lua_Alloc>:
@@ -85,26 +118,46 @@ void* l_alloc_restricted (l_alloc_limiter* limiter,
     }
 
     if (newsize == 0) {
-        free(ptr);
         limiter->memory_used -= oldsize; /* subtract old size from used memory */
+#if LUA_VERSION_NUM == 501
+        return limiter->old_allocf(limiter->old_ud, ptr, o_oldsize, newsize);
+#else
+        free(ptr);
         return NULL;
+#endif
     }
 
     int enable_limiter = limiter->limit_allocation && limiter->memory_limit;
 
     if (enable_limiter
-        && limiter->memory_used +(newsize-oldsize) > limiter->memory_limit) {
+        && limiter->memory_used+(newsize-oldsize)>limiter->memory_limit) {
         /* too much memory in use */
         return NULL;
     }
 
+#if LUA_VERSION_NUM == 501
+    ptr = limiter->old_allocf(limiter->old_ud, ptr, o_oldsize, newsize);
+#else
     ptr = realloc(ptr, newsize);
+#endif
+
     if (ptr) {
         /* reallocation successful */
         limiter->memory_used += (newsize - oldsize);
     }
 
     return ptr;
+}
+
+void enable_limit_memory(l_alloc_limiter *limiter) {
+    if(limiter != NULL)
+        limiter->limit_allocation = 1;
+}
+
+
+void disable_limit_memory(l_alloc_limiter *limiter) {
+    if(limiter != NULL)
+        limiter->limit_allocation = 0;
 }
 
 
@@ -120,7 +173,10 @@ int call_python_function_from_lua(lua_State *L) {
     luaL_argcheck(L, callable != NULL, 1, "pyfunction expected"); // can longjmp out
 
     // find the allocation limiter so we can disable it
-    lua_getfield(L, LUA_REGISTRYINDEX, EXECUTOR_MEMORY_LIMITER_KEY);
+    lua_pushstring(L, EXECUTOR_MEMORY_LIMITER_KEY);
+    lua_gettable(L, LUA_REGISTRYINDEX);
+
+    // there's a chance that this is nil
     l_alloc_limiter *limiter =
         (l_alloc_limiter*)lua_touserdata(L, -1);
     lua_pop(L, 1); // get the userdata back off the stack
@@ -128,7 +184,7 @@ int call_python_function_from_lua(lua_State *L) {
     // once we hold the GIL it's vital that we turn off the allocation checking
     // because any allocation failure will longjmp out and we'll have no chance
     // to release it
-    limiter->limit_allocation = 0;
+    if(limiter!=NULL) limiter->limit_allocation = 0;
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -171,7 +227,7 @@ int call_python_function_from_lua(lua_State *L) {
 
         // release the gil
         PyGILState_Release(gstate);
-        limiter->limit_allocation = 1;
+        if(limiter!=NULL) limiter->limit_allocation = 1;
 
         // raise the error on the lua side (longjmps out)
         lua_error(L);
@@ -184,7 +240,7 @@ int call_python_function_from_lua(lua_State *L) {
         Py_DECREF(ret);
 
         PyGILState_Release(gstate);
-        limiter->limit_allocation = 1;
+        if(limiter != NULL) limiter->limit_allocation = 1;
 
         // we have no idea how long that call may have taken, so check this
         // hook just in case
@@ -325,6 +381,11 @@ PyMODINIT_FUNC init_executor(void) {
     if(add_int_constant(module, "LUA_REGISTRYINDEX", LUA_REGISTRYINDEX)==-1)
         goto error;
 
+#ifdef LUA_GLOBALSINDEX
+    if(add_int_constant(module, "LUA_GLOBALSINDEX", LUA_GLOBALSINDEX)==-1)
+        goto error;
+#endif
+
     if(add_int_constant(module, "LUA_TNIL", LUA_TNIL)==-1)
         goto error;
     if(add_int_constant(module, "LUA_TBOOLEAN", LUA_TBOOLEAN)==-1)
@@ -357,8 +418,6 @@ PyMODINIT_FUNC init_executor(void) {
         goto error;
     if(add_int_constant(module, "LUA_ERRERR", LUA_ERRERR)==-1)
         goto error;
-    if(add_int_constant(module, "LUA_ERRGCMM", LUA_ERRGCMM)==-1)
-        goto error;
 
     if(add_int_constant(module, "LUA_MASKCOUNT", LUA_MASKCOUNT)==-1)
         goto error;
@@ -369,6 +428,9 @@ PyMODINIT_FUNC init_executor(void) {
         goto error;
 
     if(add_str_constant(module, "LUA_LIB_NAME", LUA_LIB_NAME)==-1)
+        goto error;
+
+    if(add_int_constant(module, "LUA_VERSION_NUM", LUA_VERSION_NUM)==-1)
         goto error;
 
     if(add_str_constant(module, "EXECUTOR_LUA_NUMBER_TYPE_NAME",

@@ -9,6 +9,11 @@
 #error "We require Python 2.7 to run"
 #endif
 
+#ifndef LUA_OK
+// 5.1 doesn't define this
+#define LUA_OK 0
+#endif
+
 char* EXECUTOR_LUA_CALLABLE_KEY = "EXECUTOR_LUA_CALLABLE_KEY";
 char* EXECUTOR_MEMORY_LIMITER_KEY = "EXECUTOR_MEMORY_LIMITER_KEY";
 char* EXECUTOR_RUNTIME_LIMITER_KEY = "EXECUTOR_RUNTIME_LIMITER_KEY";
@@ -18,6 +23,10 @@ typedef struct {
     int limit_allocation;
     size_t memory_used;
     size_t memory_limit;
+#if LUA_VERSION_NUM == 501
+    lua_Alloc old_allocf;
+    void* old_ud;
+#endif
 } l_alloc_limiter;
 
 typedef struct {
@@ -42,6 +51,10 @@ void retain_python_callable(PyObject* callable);
 void store_python_callable(lua_State*,PyObject*,PyObject*,PyObject*,long,PyDictObject*);
 
 void* l_alloc_restricted (l_alloc_limiter*, void *, size_t, size_t);
+l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory);
+void free_memory_limiter(l_alloc_limiter* limiter);
+void enable_limit_memory(l_alloc_limiter *limiter);
+void disable_limit_memory(l_alloc_limiter *limiter);
 
 l_runtime_limiter* new_runtime_limiter(lua_State *L, double);
 void free_runtime_limiter(lua_State *L, l_runtime_limiter*);

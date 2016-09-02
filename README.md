@@ -7,7 +7,7 @@ running in a sandboxed environment.
 * Limit libraries available to user scripts (and some sane defaults via `SandboxedExecutor`)
 * Limit user script execution time
 * Limit Lua memory usage
-* supports 5.2 and 5.3 (support for loadjit is currently not implemented)
+* supports lua 5.2, 5.3, and luajit (memory and runtime limiting are not supported with luajit)
 
 # Example:
 

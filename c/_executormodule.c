@@ -31,9 +31,20 @@ l_runtime_limiter* new_runtime_limiter(lua_State *L, double max_runtime) {
 }
 
 
-void time_limiting_hook(lua_State *L, lua_Debug *ar) {
+void time_limiting_hook(lua_State *L, lua_Debug *_ar) {
     // find the runtime limiter
-    lua_getfield(L, LUA_REGISTRYINDEX, EXECUTOR_RUNTIME_LIMITER_KEY);
+
+    lua_pushstring(L, EXECUTOR_RUNTIME_LIMITER_KEY);
+    lua_gettable(L, LUA_REGISTRYINDEX);
+
+    if(lua_isnil(L, -1)) {
+        // limiting isn't turned on right now
+        lua_pop(L, 1); // remove the nil
+        return;
+    }
+
+    // otherwise the userdata is on the stack now
+
     l_runtime_limiter* limiter = (l_runtime_limiter*)lua_touserdata(L, -1);
     lua_pop(L, 1); // get the userdata back off the stack
 
@@ -174,6 +185,10 @@ int call_python_function_from_lua(lua_State *L) {
 
         PyGILState_Release(gstate);
         limiter->limit_allocation = 1;
+
+        // we have no idea how long that call may have taken, so check this
+        // hook just in case
+        time_limiting_hook(L, NULL); // may not return
 
         return 1; // one return value that the wrapper left on the stack
     }
@@ -347,6 +362,9 @@ PyMODINIT_FUNC init_executor(void) {
 
     if(add_int_constant(module, "LUA_MASKCOUNT", LUA_MASKCOUNT)==-1)
         goto error;
+    if(add_int_constant(module, "LUA_MASKRET", LUA_MASKRET)==-1)
+        goto error;
+
     if(add_int_constant(module, "LUA_GCCOLLECT", LUA_GCCOLLECT)==-1)
         goto error;
 

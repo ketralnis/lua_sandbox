@@ -790,7 +790,7 @@ class SandboxedExecutor(Lua):
                  env=None,
                  **kw):
         # bring up the VM
-        super(SandboxedExecutor, self).__init__(**kw)
+        super(SandboxedExecutor, self).__init__(name=name, **kw)
 
         loaded_sandboxer = self.load(
             sandboxer,

@@ -1,5 +1,4 @@
-lua_sandbox is a library for calling Lua code from Python that emphasises
-running in a sandboxed environment.
+lua_sandbox is a library for calling Lua code from Python that emphasises running in a sandboxed environment.
 
 # Features
 
@@ -7,7 +6,7 @@ running in a sandboxed environment.
 * Limit libraries available to user scripts (and some sane defaults via `SandboxedExecutor`)
 * Limit user script execution time
 * Limit Lua memory usage
-* supports lua 5.2, 5.3, and luajit (memory and runtime limiting are not supported with luajit)
+* supports lua 5.2, 5.3, and luajit (see below)
 
 # Example:
 
@@ -32,3 +31,7 @@ Prints:
 ```
     The result is 210.0
 ```
+
+# luajit support notes
+
+lua_sandbox supports luajit 2.0 with some limitations. Memory limiting doesn't currently work (if it's enabled, the process will crash when the limit is hit). Runtime limiting can be defeated in some cases (if a chunk with problematic code is run without the limiter and then again under it). Additionally, the JIT compiler is turned off when running runtime limited code.

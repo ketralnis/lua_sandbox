@@ -7,6 +7,10 @@
 #include <lualib.h>
 #include <lauxlib.h>
 
+#if LUA_VERSION_NUM == 501
+#include "luajit.h"
+#endif
+
 #include "_executormodule.h"
 
 #define EXECUTOR_XSTR(s) EXECUTOR_STR(s)
@@ -423,6 +427,8 @@ PyMODINIT_FUNC init_executor(void) {
         goto error;
     if(add_int_constant(module, "LUA_MASKRET", LUA_MASKRET)==-1)
         goto error;
+    if(add_int_constant(module, "LUA_MASKLINE", LUA_MASKLINE)==-1)
+        goto error;
 
     if(add_int_constant(module, "LUA_GCCOLLECT", LUA_GCCOLLECT)==-1)
         goto error;
@@ -432,6 +438,25 @@ PyMODINIT_FUNC init_executor(void) {
 
     if(add_int_constant(module, "LUA_VERSION_NUM", LUA_VERSION_NUM)==-1)
         goto error;
+
+#if LUA_VERSION_NUM == 501
+
+    if(add_int_constant(module, "LUAJIT_MODE_ENGINE", LUAJIT_MODE_ENGINE)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_FUNC", LUAJIT_MODE_FUNC)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_ALLFUNC", LUAJIT_MODE_ALLFUNC)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_ALLSUBFUNC", LUAJIT_MODE_ALLSUBFUNC)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_OFF", LUAJIT_MODE_OFF)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_ON", LUAJIT_MODE_ON)==-1)
+        goto error;
+    if(add_int_constant(module, "LUAJIT_MODE_FLUSH", LUAJIT_MODE_FLUSH)==-1)
+        goto error;
+
+#endif
 
     if(add_str_constant(module, "EXECUTOR_LUA_NUMBER_TYPE_NAME",
                         EXECUTOR_XSTR(LUA_NUMBER))==-1)

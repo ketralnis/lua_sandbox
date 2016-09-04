@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import multiprocessing
 import os
 import threading
 import time
@@ -257,7 +258,6 @@ class TestSafeguards(TestLuaExecution):
             return 1
         """)
 
-    @skip_if_luajit
     def test_timeout(self):
         def _tester(program):
             start_time = time.time()
@@ -323,7 +323,7 @@ if __name__ == '__main__':
     if os.environ.get('LEAKTEST', False):
         while True:
             threads = []
-            for _ in range(10):
+            for _ in range(multiprocessing.cpu_count()):
                 def _fn():
                     for _ in range(100):
                         unittest.main(verbosity=0, exit=False)

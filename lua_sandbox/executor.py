@@ -157,6 +157,8 @@ if _executor.LUA_VERSION_NUM == 501:
         return lua_setfield(L, _executor.LUA_GLOBALSINDEX, s)
 
 
+    luaJIT_setmode = lua_lib.luaJIT_setmode
+
 elif _executor.LUA_VERSION_NUM in (502, 503):
     lua_pcallk = lua_lib.lua_pcallk
     lua_tonumberx = lua_lib.lua_tonumberx
@@ -315,6 +317,13 @@ class Lua(object):
                         mask,
                         max_runtime_hz)
 
+            # in order for that to apply to compiled code we have to turn off
+            # the compiler :( there's still some win because luajit's
+            # interpreter is still faster than canonical Lua's
+            if _executor.LUA_VERSION_NUM == 501:
+                luaJIT_setmode(self.L, 0,
+                    _executor.LUAJIT_MODE_ENGINE | _executor.LUAJIT_MODE_OFF)
+
             yield
 
         finally:
@@ -323,6 +332,12 @@ class Lua(object):
 
             # free the limiter
             executor_free_runtime_limiter(self.L, limiter)
+
+            if _executor.LUA_VERSION_NUM == 501:
+                # can turn this back on now. note that there's no
+                # luaJIT_getmode so we can't know if it was turned on before
+                luaJIT_setmode(self.L, 0,
+                    _executor.LUAJIT_MODE_ENGINE | _executor.LUAJIT_MODE_ON)
 
     @check_stack(3, 0)
     def install_python_callable(self):

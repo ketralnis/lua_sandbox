@@ -137,9 +137,7 @@ def luaL_getmetatable(L, n):
 
 
 if _executor.LUA_VERSION_NUM == 501:
-    lua_pcall = lua_lib.lua_pcall
-    def lua_pcallk(L, nargs, nresults, _errfunc, _ctx, _k):
-        return lua_pcall(L, nargs, nresults, 0)
+    lua_pcallk = executor_lib.memory_safe_pcallk
 
     lua_tonumber = lua_lib.lua_tonumber
     lua_tonumber.restype = lua_number_type

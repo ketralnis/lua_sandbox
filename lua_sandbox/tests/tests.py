@@ -242,7 +242,6 @@ class TestSafeguards(TestLuaExecution):
         self.ex = SimpleSandboxedExecutor(name=self.id(),
             max_memory=5*1024*1024)
 
-    @skip_if_luajit
     def test_memory(self):
         def _tester(program):
             start_time = time.time()

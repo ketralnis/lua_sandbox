@@ -17,6 +17,7 @@
 char* EXECUTOR_LUA_CALLABLE_KEY = "EXECUTOR_LUA_CALLABLE_KEY";
 char* EXECUTOR_MEMORY_LIMITER_KEY = "EXECUTOR_MEMORY_LIMITER_KEY";
 char* EXECUTOR_RUNTIME_LIMITER_KEY = "EXECUTOR_RUNTIME_LIMITER_KEY";
+char* EXECUTOR_JMP_RETURN_KEY = "EXECUTOR_JMP_RETURN_KEY";
 
 // mirrored in executor.py
 typedef struct {
@@ -59,5 +60,9 @@ void disable_limit_memory(l_alloc_limiter *limiter);
 l_runtime_limiter* new_runtime_limiter(lua_State *L, double);
 void free_runtime_limiter(lua_State *L, l_runtime_limiter*);
 void time_limiting_hook(lua_State *L, lua_Debug *ar);
+
+#if LUA_VERSION_NUM == 501
+int memory_safe_pcallk(lua_State *L, int nargs, int nresults, int _msgh);
+#endif
 
 #endif /* _EXECUTOR_MODULE_H */

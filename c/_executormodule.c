@@ -248,6 +248,55 @@ int call_python_function_from_lua(lua_State *L) {
 }
 
 
+#if LUA_VERSION_NUM == 501
+
+static int memory_panicer (lua_State *L) {
+    // if we're out of memory, this might not even work
+    lua_getfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
+    jmp_buf *jb = lua_touserdata(L, -1);
+    lua_pop(L, 1);
+
+    longjmp(*jb, 1);
+
+    return 0; // unreachable
+}
+
+int memory_safe_pcallk(lua_State *L, int nargs, int nresults, int _msgh) {
+    jmp_buf jb;
+
+    int i_excepted = setjmp(jb);
+    int ret;
+
+    lua_CFunction oldppanicer = lua_atpanic(L, memory_panicer);
+
+    if(i_excepted == 0) {
+        // try
+
+        // there's only one of these globals which keeps us from being safely
+        // recursive
+        lua_pushlightuserdata(L, &jb);
+        lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
+
+        ret = lua_pcall(L, nargs, nresults, 0);
+
+        lua_pushnil(L);
+        lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
+
+    } else {
+        // except (the memory_panicer ran)
+
+        ret = LUA_ERRMEM;
+    }
+
+    // restore the old one
+    lua_atpanic(L, oldppanicer);
+
+    return ret;
+}
+
+#endif
+
+
 void store_python_callable(lua_State *L,
                            PyObject* executor,
                            PyObject* callable,

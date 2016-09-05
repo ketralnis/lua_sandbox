@@ -19,6 +19,7 @@ apt-get -y install python python-pip python-dev $USE_LUA_LIB
 
 # development conveniences
 apt-get -y install gdb python-all-dbg
+pip install pympler
 
 # I use this VM for packaging too so add that stuff in while we're at it. you
 # can comment it out if it slows stuff down for you a lot

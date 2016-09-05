@@ -415,7 +415,7 @@ class Lua(object):
 
     def __del__(self):
         if self.L:
-            executor_free_memory_limiter(self.memory_limiter)
+            executor_free_memory_limiter(self.L, self.memory_limiter)
             self.cleanup_cache['lua_close'](self.L)
 
 

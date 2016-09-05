@@ -320,6 +320,10 @@ class TestReusingExecutor(TestLuaExecution):
 
 if __name__ == '__main__':
     if os.environ.get('LEAKTEST', False):
+        from pympler import tracker
+
+        tr = tracker.SummaryTracker()
+
         def _fn():
             for _ in range(10):
                 unittest.main(verbosity=0, exit=False)
@@ -334,6 +338,11 @@ if __name__ == '__main__':
 
             for t in threads:
                 t.join()
+
+            del t
+            del threads
+
+            tr.print_diff()
 
     else:
         unittest.main()

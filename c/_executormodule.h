@@ -53,7 +53,7 @@ void store_python_callable(lua_State*,PyObject*,PyObject*,PyObject*,long,PyDictO
 
 void* l_alloc_restricted (l_alloc_limiter*, void *, size_t, size_t);
 l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory);
-void free_memory_limiter(l_alloc_limiter* limiter);
+void free_memory_limiter(lua_State *L, l_alloc_limiter* limiter);
 void enable_limit_memory(l_alloc_limiter *limiter);
 void disable_limit_memory(l_alloc_limiter *limiter);
 

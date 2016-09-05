@@ -13,25 +13,25 @@ lua_sandbox is a library for calling Lua code from Python that emphasises runnin
 Simple code:
 
 ```python
-    from lua_sandbox.executor import SandboxedExecutor
+from lua_sandbox.executor import SandboxedExecutor
 
-    loaded = SandboxedExecutor().sandboxed_load("""
-            local sum = 0
-            for i = 1, 20 do
-                sum = sum + i
-            end
-            return sum
-        """)
-    result = loaded()[0]
+loaded = SandboxedExecutor().sandboxed_load("""
+        local sum = 0
+        for i = 1, 20 do
+            sum = sum + i
+        end
+        return sum
+    """)
+result = loaded()[0]
 
-    print "The result is", result.to_python()
+print "The result is", result.to_python()
 ```
 
 Prints:
 ```
-    The result is 210.0
+The result is 210.0
 ```
 
 # luajit support notes
 
-lua_sandbox supports luajit 2.0 with some limitations. Memory limiting doesn't currently work (if it's enabled, the process will crash when the limit is hit). Runtime limiting can be defeated in some cases (if a chunk with problematic code is run without the limiter and then again under it). Additionally, the JIT compiler is turned off when running runtime limited code.
+lua_sandbox supports luajit 2.0 with some limitations. Runtime limiting can be defeated in some cases (e.g. if a chunk with problematic code is run without the limiter and then again under it). Additionally, the JIT compiler is turned off when running runtime limited code.

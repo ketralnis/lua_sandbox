@@ -107,47 +107,40 @@ void free_memory_limiter(l_alloc_limiter* limiter) {
 
 
 void* l_alloc_restricted (l_alloc_limiter* limiter,
-                          void *ptr, size_t o_oldsize, size_t newsize) {
-    size_t oldsize = o_oldsize;
+                          void *ptr, size_t o_old_size, size_t new_size) {
+    size_t old_size = o_old_size;
 
     if(ptr == NULL) {
         /*
          * <http://www.lua.org/manual/5.2/manual.html#lua_Alloc>:
-         * When ptr is NULL, oldsize encodes the kind of object that Lua is
+         * When ptr is NULL, old_size encodes the kind of object that Lua is
          * allocating.
          *
          * Since we don't care about that, just mark it as 0
          */
-        oldsize = 0;
-    }
-
-    if (newsize == 0) {
-        limiter->memory_used -= oldsize; /* subtract old size from used memory */
-#if LUA_VERSION_NUM == 501
-        return limiter->old_allocf(limiter->old_ud, ptr, o_oldsize, newsize);
-#else
-        free(ptr);
-        return NULL;
-#endif
+        old_size = 0;
     }
 
     int enable_limiter = limiter->limit_allocation && limiter->memory_limit;
 
-    if (enable_limiter
-        && limiter->memory_used+(newsize-oldsize)>limiter->memory_limit) {
+    size_t new_total = limiter->memory_used;
+    new_total -= old_size;
+    new_total += new_size;
+
+    if (enable_limiter && new_total>limiter->memory_limit) {
         /* too much memory in use */
         return NULL;
     }
 
 #if LUA_VERSION_NUM == 501
-    ptr = limiter->old_allocf(limiter->old_ud, ptr, o_oldsize, newsize);
+    ptr = limiter->old_allocf(limiter->old_ud, ptr, o_old_size, new_size);
 #else
-    ptr = realloc(ptr, newsize);
+    ptr = realloc(ptr, new_size);
 #endif
 
     if (ptr) {
         /* reallocation successful */
-        limiter->memory_used += (newsize - oldsize);
+        limiter->memory_used = new_total;
     }
 
     return ptr;

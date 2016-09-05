@@ -55,8 +55,6 @@ lua_getfield.restype = None
 lua_gettop = lua_lib.lua_gettop
 lua_gettop.restype = ctypes.c_int
 lua_newstate = lua_lib.lua_newstate
-lua_newstate = lua_lib.lua_newstate
-lua_newstate.restype = ctypes.c_void_p
 lua_newstate.restype = ctypes.c_void_p
 lua_next = lua_lib.lua_next
 lua_pushboolean = lua_lib.lua_pushboolean
@@ -857,7 +855,7 @@ class LuaSyntaxError(LuaStateException):
 SANDBOXER = datafile("lua_utils/safe_sandbox.lua")
 
 
-class SandboxedExecutor(Lua):
+class SandboxedExecutor(object):
     def __init__(self,
                  name=None,
                  sandboxer=SANDBOXER,
@@ -865,11 +863,11 @@ class SandboxedExecutor(Lua):
                  env=None,
                  **kw):
         # bring up the VM
-        super(SandboxedExecutor, self).__init__(name=name, **kw)
+        self.ex = Lua(name=name, **kw)
 
-        loaded_sandboxer = self.load(
+        loaded_sandboxer = self.ex.load(
             sandboxer,
-            desc='%s.sandboxer' % self.name)
+            desc='%s.sandboxer' % self.ex.name)
 
         self.sandbox = loaded_sandboxer()[0]
 
@@ -885,9 +883,18 @@ class SandboxedExecutor(Lua):
             for k, v in env.items():
                 self.sandbox[k] = v
 
+    def __getattr__(self, attr):
+        return getattr(self.ex, attr)
+
+    def __getitem__(self, *a, **kw):
+        return self.ex.__getitem__(*a, **kw)
+
+    def __setitem__(self, *a, **kw):
+        return self.ex.__setitem__(*a, **kw)
+
     @check_stack(2, 0)
     def sandboxed_load(self, *a, **kw):
-        loaded = super(SandboxedExecutor, self).load(*a, **kw)
+        loaded = self.ex.load(*a, **kw)
 
         with loaded._bring_to_top():
             self.sandbox._bring_to_top(False)

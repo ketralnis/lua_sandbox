@@ -321,17 +321,20 @@ class TestReusingExecutor(TestLuaExecution):
 
 if __name__ == '__main__':
     if os.environ.get('LEAKTEST', False):
+        def _fn():
+            for _ in range(10):
+                unittest.main(verbosity=0, exit=False)
+
         while True:
             threads = []
             for _ in range(multiprocessing.cpu_count()):
-                def _fn():
-                    for _ in range(100):
-                        unittest.main(verbosity=0, exit=False)
                 t = threading.Thread(target=_fn)
                 t.daemon = True
                 t.start()
                 threads.append(t)
+
             for t in threads:
                 t.join()
+
     else:
         unittest.main()

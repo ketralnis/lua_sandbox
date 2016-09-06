@@ -388,6 +388,19 @@ error:
 }
 
 
+PyObject* decapsule(python_callable* callable) {
+    PyGILState_STATE gstate;
+    gstate = PyGILState_Ensure();
+
+    PyObject* ret = callable->val;
+    Py_INCREF(ret);
+
+    PyGILState_Release(gstate);
+
+    return ret;
+}
+
+
 static int add_int_constant(PyObject* module, char* name, int value) {
     PyObject *as_int = PyInt_FromLong(value);
     if(as_int == NULL) {

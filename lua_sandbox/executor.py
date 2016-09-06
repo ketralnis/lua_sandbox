@@ -52,6 +52,8 @@ lua_getallocf = lua_lib.lua_getallocf
 lua_getallocf.restype = ctypes.c_void_p
 lua_getfield = lua_lib.lua_getfield
 lua_getfield.restype = None
+lua_getmetatable = lua_lib.lua_getmetatable
+lua_getmetatable.restype = ctypes.c_int
 lua_gettop = lua_lib.lua_gettop
 lua_gettop.restype = ctypes.c_int
 lua_newstate = lua_lib.lua_newstate
@@ -93,6 +95,8 @@ lua_setupvalue.restype = ctypes.c_void_p # this isn't true but we never use it
 lua_toboolean = lua_lib.lua_toboolean
 lua_tolstring = lua_lib.lua_tolstring
 lua_tolstring.restype = ctypes.c_char_p
+lua_touserdata = lua_lib.lua_touserdata
+lua_touserdata.restype = ctypes.c_void_p
 lua_type = lua_lib.lua_type
 lua_typename = lua_lib.lua_typename
 lua_typename.restype = ctypes.c_char_p
@@ -103,24 +107,26 @@ EXECUTOR_LUA_CALLABLE_KEY = ctypes.c_char_p.in_dll(executor_lib,
 EXECUTOR_MEMORY_LIMITER_KEY = ctypes.c_void_p.in_dll(executor_lib,
     "EXECUTOR_MEMORY_LIMITER_KEY")
 executor_call_python_function_from_lua = executor_lib.call_python_function_from_lua
+executor_decapsule = executor_lib.decapsule
+executor_decapsule.restype = ctypes.py_object
+executor_disable_limit_memory = executor_lib.disable_limit_memory
+executor_disable_limit_memory.restype = None
+executor_enable_limit_memory = executor_lib.enable_limit_memory
+executor_enable_limit_memory.restype = None
+executor_free_memory_limiter = executor_lib.free_memory_limiter
+executor_free_memory_limiter.restype = ctypes.c_void_p
 executor_free_python_callable = executor_lib.free_python_callable
 executor_free_runtime_limiter = executor_lib.free_runtime_limiter
 executor_free_runtime_limiter.restype = None
 executor_l_alloc_restricted = executor_lib.l_alloc_restricted
+executor_new_memory_limiter = executor_lib.new_memory_limiter
+executor_new_memory_limiter.restype = ctypes.c_void_p
 executor_new_runtime_limiter = executor_lib.new_runtime_limiter
 executor_new_runtime_limiter.restype = ctypes.c_void_p
 executor_store_python_callable = executor_lib.store_python_callable
 executor_store_python_callable.restype = None
 executor_time_limiting_hook = executor_lib.time_limiting_hook
 executor_time_limiting_hook.restype = ctypes.c_void_p
-executor_new_memory_limiter = executor_lib.new_memory_limiter
-executor_new_memory_limiter.restype = ctypes.c_void_p
-executor_free_memory_limiter = executor_lib.free_memory_limiter
-executor_free_memory_limiter.restype = ctypes.c_void_p
-executor_enable_limit_memory = executor_lib.enable_limit_memory
-executor_enable_limit_memory.restype = None
-executor_disable_limit_memory = executor_lib.disable_limit_memory
-executor_disable_limit_memory.restype = None
 
 
 # function types
@@ -134,6 +140,10 @@ def lua_pop(L, n):
 
 def luaL_getmetatable(L, n):
     return lua_getfield(L, _executor.LUA_REGISTRYINDEX, n)
+
+
+def lua_isnil(L, idx):
+    return lua_type(L, idx) == _executor.LUA_TNIL
 
 
 if _executor.LUA_VERSION_NUM == 501:
@@ -349,6 +359,9 @@ class Lua(object):
         lua_pushcclosure(self.L, executor_call_python_function_from_lua, 0)
         lua_setfield(self.L, -2, '__call')
 
+        lua_pushstring(self.L, "capsule")
+        lua_setfield(self.L, -2, "capsule")
+
         lua_pop(self.L, 1)  # get the metatable off the stack
 
     def gc(self):
@@ -498,16 +511,20 @@ class LuaValue(object):
 
         if kind == _executor.LUA_TNIL:
             return None
+
         elif kind == _executor.LUA_TBOOLEAN:
             return bool(lua_toboolean(self.L, idx, None))
+
         elif kind == _executor.LUA_TNUMBER:
             return lua_tonumberx(self.L, idx, None)
+
         elif kind == _executor.LUA_TSTRING:
             size = ctypes.c_size_t(0)
             as_char_p = lua_tolstring(self.L, idx, ctypes.byref(size))
             # since that's a ptr into Lua state we need to copy it out
             as_string = ctypes.string_at(as_char_p, size.value)
             return as_string
+
         elif kind == _executor.LUA_TTABLE:
             ret = {}
 
@@ -537,8 +554,30 @@ class LuaValue(object):
             return ret
         elif kind == _executor.LUA_TFUNCTION:
             return self # we're already callable
+
+        elif kind == _executor.LUA_TUSERDATA and self.is_capsule(idx):
+            ptr_v = ctypes.c_void_p(lua_touserdata(self.L, -1))
+            ptr_py = executor_lib.decapsule(ptr_v)
+            return ptr_py
+
         else:
             raise LuaException("can't coerce %s" % self.type_name())
+
+    @check_stack(2, 0)
+    def is_capsule(self, idx):
+        idx = abs_index(self.L, idx)
+
+        if not lua_getmetatable(self.L, idx):
+            return False
+
+        lua_pushstring(self.L, "capsule")
+        lua_rawget(self.L, -2)
+        ret = not lua_isnil(self.L, -1)
+
+        # metatable and value|nil is on the stack
+        lua_pop(self.L, 2)
+
+        return ret
 
     @check_stack(1, 0)
     def to_python(self):
@@ -771,7 +810,9 @@ class LuaValue(object):
             # now the table should be at the top
             return LuaValue(executor)
 
-        elif callable(val):
+        elif callable(val) or isinstance(val, Capsule):
+            val = val.inner if isinstance(val, Capsule) else val
+
             val_id = id(val)
 
             # fiddling with pointers is easier in C (leaves the userdata on
@@ -792,7 +833,7 @@ class LuaValue(object):
                             comment=repr(val),
                             cycle_id=val)
 
-        raise TypeError("can't serialise %r" % (val,))
+        raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 
 
 def _callable_wrapper(executor, val):
@@ -813,6 +854,17 @@ def _callable_wrapper(executor, val):
     # leave this on top of the stack for
     # call_python_function_from_lua to do the rest
     as_lua._bring_to_top(False)
+
+
+class Capsule(object):
+    """
+    A container for passing Python objects through Lua unmolested
+    """
+
+    __slots__ = ['inner']
+
+    def __init__(self, inner):
+        self.inner = inner
 
 
 class LuaException(Exception):

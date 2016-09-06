@@ -50,6 +50,7 @@ int call_python_function_from_lua(lua_State *L);
 int free_python_callable(lua_State *L);
 void retain_python_callable(PyObject* callable);
 void store_python_callable(lua_State*,PyObject*,PyObject*,PyObject*,long,PyDictObject*);
+PyObject* decapsule(python_callable* callable);
 
 void* l_alloc_restricted (l_alloc_limiter*, void *, size_t, size_t);
 l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory);

@@ -13,6 +13,7 @@ from lua_sandbox.executor import LuaSyntaxError
 from lua_sandbox.executor import SandboxedExecutor
 from lua_sandbox.executor import check_stack
 from lua_sandbox.executor import _executor
+from lua_sandbox.executor import Capsule
 
 
 class SimpleSandboxedExecutor(object):
@@ -143,6 +144,35 @@ class TestLuaExecution(unittest.TestCase):
             d = {}
             d['foo'] = d
             self.ex.execute(program, {'foo': d})
+
+    def test_capsule_return(self):
+        program = """
+            return capsule
+        """
+
+        obj = object()
+        capsule = Capsule(obj)
+        ret = self.ex.execute(program, {'capsule': capsule})
+        self.assertIs(obj, ret[0])
+
+    def test_capsule_return_pass_arg(self):
+        success = []
+
+        orig = object()
+        capsule = Capsule(orig)
+
+        def _fn(cap):
+            success.append(cap)
+            return Capsule(cap)
+
+        program = """
+            return foo(capsule)
+        """
+
+        ret = self.ex.execute(program, {'foo': _fn, 'capsule': capsule})
+
+        self.assertEqual(success, [orig])
+        self.assertEqual(ret, (orig,))
 
     def test_function_noargs(self):
         program = """

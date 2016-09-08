@@ -137,7 +137,12 @@ void* l_alloc_restricted (l_alloc_limiter* limiter,
     new_total -= old_size;
     new_total += new_size;
 
-    if (enable_limiter && new_total>limiter->memory_limit) {
+    if (enable_limiter
+        // we're using more than the limit
+        && new_total>limiter->memory_limit
+        // we're trying to grow (lua panics if we return NULL when shrinking)
+        && new_total>limiter->memory_used) {
+
         /* too much memory in use */
         return NULL;
     }

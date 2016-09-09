@@ -85,7 +85,6 @@ lua_setallocf = lua_lib.lua_setallocf
 lua_setallocf.restype = None
 lua_setfield = lua_lib.lua_setfield
 lua_setfield.restype = ctypes.c_int
-lua_sethook = lua_lib.lua_sethook
 lua_setmetatable = lua_lib.lua_setmetatable
 lua_setmetatable.restype = None
 lua_settop = lua_lib.lua_settop
@@ -102,32 +101,28 @@ lua_typename = lua_lib.lua_typename
 lua_typename.restype = ctypes.c_char_p
 
 
-EXECUTOR_LUA_CALLABLE_KEY = ctypes.c_char_p.in_dll(executor_lib,
-    "EXECUTOR_LUA_CALLABLE_KEY")
-EXECUTOR_MEMORY_LIMITER_KEY = ctypes.c_void_p.in_dll(executor_lib,
-    "EXECUTOR_MEMORY_LIMITER_KEY")
-executor_call_python_function_from_lua = executor_lib.call_python_function_from_lua
-executor_decapsule = executor_lib.decapsule
-executor_decapsule.restype = ctypes.py_object
-executor_disable_limit_memory = executor_lib.disable_limit_memory
-executor_disable_limit_memory.restype = None
-executor_enable_limit_memory = executor_lib.enable_limit_memory
-executor_enable_limit_memory.restype = None
-executor_free_memory_limiter = executor_lib.free_memory_limiter
-executor_free_memory_limiter.restype = ctypes.c_void_p
-executor_free_python_callable = executor_lib.free_python_callable
-executor_free_runtime_limiter = executor_lib.free_runtime_limiter
-executor_free_runtime_limiter.restype = None
-executor_l_alloc_restricted = executor_lib.l_alloc_restricted
-executor_new_memory_limiter = executor_lib.new_memory_limiter
-executor_new_memory_limiter.restype = ctypes.c_void_p
-executor_new_runtime_limiter = executor_lib.new_runtime_limiter
-executor_new_runtime_limiter.restype = ctypes.c_void_p
-executor_store_python_callable = executor_lib.store_python_callable
-executor_store_python_callable.restype = None
-executor_time_limiting_hook = executor_lib.time_limiting_hook
-executor_time_limiting_hook.restype = ctypes.c_void_p
-
+EXECUTOR_LUA_CAPSULE_KEY = ctypes.c_char_p.in_dll(executor_lib,
+    "EXECUTOR_LUA_CAPSULE_KEY")
+install_control_block = executor_lib.install_control_block
+install_control_block.restype = ctypes.c_int
+wrapped_lua_close = executor_lib.wrapped_lua_close
+wrapped_lua_close.restype = None
+start_runtime_limiter = executor_lib.start_runtime_limiter
+start_runtime_limiter.restype = None
+finish_runtime_limiter = executor_lib.finish_runtime_limiter
+finish_runtime_limiter.restype = None
+enable_limit_memory = executor_lib.enable_limit_memory
+enable_limit_memory.restype = None
+disable_limit_memory = executor_lib.disable_limit_memory
+disable_limit_memory.restype = None
+call_python_function_from_lua = executor_lib.call_python_function_from_lua
+call_python_function_from_lua.restype = ctypes.c_int
+store_python_capsule = executor_lib.store_python_capsule
+store_python_capsule.restype = None
+free_python_capsule = executor_lib.free_python_capsule
+free_python_capsule.restype = ctypes.c_int
+decapsule = executor_lib.decapsule
+decapsule.restype = ctypes.py_object
 
 # function types
 lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
@@ -240,20 +235,6 @@ class Lua(object):
 
         max_memory = max_memory or 0
 
-        self.L = luaL_newstate()
-        self.L = ctypes.c_void_p(self.L)  # save us casts later
-
-        memory_limiter = executor_new_memory_limiter(self.L, max_memory)
-        self.memory_limiter = ctypes.c_void_p(memory_limiter)
-        lua_setallocf(self.L,
-                      executor_l_alloc_restricted,
-                      self.memory_limiter)
-
-        self.install_memory_limiter()
-
-        luaL_openlibs(self.L)
-        self.install_python_callable()
-
         # If every time we hold a reference in Lua land to an object in Python
         # land we do the obvious incref/decref pair we end up with reference
         # cycles which prevent those objects from ever getting cleaned up
@@ -268,19 +249,19 @@ class Lua(object):
         # https://github.com/scoder/lupa/commit/c634e44d77a17adcf99a562284da76a5a40065a4
         self.cycles = {}
 
+        self.L = luaL_newstate()
+        self.L = ctypes.c_void_p(self.L)  # save us casts later
+
+        if not install_control_block(self.L, ctypes.c_size_t(max_memory)):
+            raise LuaOutOfMemoryException("couldn't allocate control block")
+
+        luaL_openlibs(self.L)
+        self.install_python_callable()
+
         # hold on to this for __del__
         self.cleanup_cache = dict(
-            lua_close = lua_close,
-            executor_free_memory_limiter = executor_free_memory_limiter,
+            wrapped_lua_close = wrapped_lua_close,
         )
-
-    @check_stack(2, 0)
-    def install_memory_limiter(self):
-        # n.b. this is global across the whole VM
-
-        lua_pushstring(self.L, EXECUTOR_MEMORY_LIMITER_KEY)
-        lua_pushlightuserdata(self.L, self.memory_limiter)
-        lua_rawset(self.L, _executor.LUA_REGISTRYINDEX)
 
     def __repr__(self):
         return "<%s %s>" % (self.__class__.__name__, self.name)
@@ -290,56 +271,27 @@ class Lua(object):
                       max_runtime=MAX_RUNTIME_DEFAULT,
                       max_runtime_hz=MAX_RUNTIME_HZ_DEFAULT):
 
-        limiter = executor_new_runtime_limiter(self.L,
-                                               ctypes.c_double(max_runtime))
-
-        if not limiter:
-            raise MemoryError("allocating runtime limiter")
-
-        limiter = ctypes.c_void_p(limiter)
+        start_runtime_limiter(self.L,
+                              ctypes.c_double(max_runtime),
+                              ctypes.c_int(max_runtime_hz))
 
         try:
-            mask = _executor.LUA_MASKCOUNT
-
-            lua_sethook(self.L,
-                        executor_time_limiting_hook,
-                        mask,
-                        max_runtime_hz)
-
-            # in order for that to apply to compiled code we have to turn off
-            # the compiler :( there's still some win because luajit's
-            # interpreter is still faster than canonical Lua's
-            if _executor.LUA_VERSION_NUM == 501:
-                luaJIT_setmode(self.L, 0,
-                    _executor.LUAJIT_MODE_ENGINE | _executor.LUAJIT_MODE_OFF)
-
             yield
-
         finally:
-            # remove the hook
-            lua_sethook(self.L, None, 0, 0)
-
-            # free the limiter
-            executor_free_runtime_limiter(self.L, limiter)
-
-            if _executor.LUA_VERSION_NUM == 501:
-                # can turn this back on now. note that there's no
-                # luaJIT_getmode so we can't know if it was turned on before
-                luaJIT_setmode(self.L, 0,
-                    _executor.LUAJIT_MODE_ENGINE | _executor.LUAJIT_MODE_ON)
+            finish_runtime_limiter(self.L)
 
     @check_stack(3, 0)
     def install_python_callable(self):
         # we create a global metatable to act as a prototype that contains our
         # methods
-        luaL_newmetatable(self.L, EXECUTOR_LUA_CALLABLE_KEY)
+        luaL_newmetatable(self.L, EXECUTOR_LUA_CAPSULE_KEY)
 
         # we need to be able to dealloc them
-        lua_pushcclosure(self.L, executor_free_python_callable, 0)
+        lua_pushcclosure(self.L, free_python_capsule, 0)
         lua_setfield(self.L, -2, '__gc')
 
         # and call them
-        lua_pushcclosure(self.L, executor_call_python_function_from_lua, 0)
+        lua_pushcclosure(self.L, call_python_function_from_lua, 0)
         lua_setfield(self.L, -2, '__call')
 
         lua_pushstring(self.L, "capsule")
@@ -411,9 +363,7 @@ class Lua(object):
 
     def __del__(self):
         if self.L:
-            self.cleanup_cache['executor_free_memory_limiter'](
-                self.L, self.memory_limiter)
-            self.cleanup_cache['lua_close'](self.L)
+            self.cleanup_cache['wrapped_lua_close'](self.L)
 
 
 class LuaValue(object):
@@ -451,7 +401,7 @@ class LuaValue(object):
         )
 
         if cycle_id:
-            # added here, removed in _executormodule.c:free_python_callable
+            # added here, removed in _executormodule.c:free_python_capsule
             self.executor.cycles.setdefault(id(cycle_id), []).append(cycle_id)
             self.cycle_id = id(cycle_id)
 
@@ -541,7 +491,7 @@ class LuaValue(object):
 
         elif kind == _executor.LUA_TUSERDATA and self.is_capsule(idx):
             ptr_v = ctypes.c_void_p(lua_touserdata(self.L, -1))
-            ptr_py = executor_lib.decapsule(ptr_v)
+            ptr_py = decapsule(ptr_v)
             return ptr_py
 
         else:
@@ -597,7 +547,7 @@ class LuaValue(object):
 
         # allocation limiting must only be turned on while we're operating
         # inside of a pcall, or Lua's crazy longjmp thing will kick in
-        executor_enable_limit_memory(self.executor.memory_limiter)
+        enable_limit_memory(self.L)
 
         # lua_pcallk will pop the function all of the arguments that we added,
         # whether or not it fails
@@ -605,7 +555,7 @@ class LuaValue(object):
                                len(lua_args), _executor.LUA_MULTRET,
                                0, 0, None)
 
-        executor_disable_limit_memory(self.executor.memory_limiter)
+        disable_limit_memory(self.L)
 
         if pcall_ret == _executor.LUA_OK:
             after_top = lua_gettop(self.L)
@@ -801,15 +751,15 @@ class LuaValue(object):
 
             # fiddling with pointers is easier in C (leaves the userdata on
             # the stack)
-            executor_store_python_callable(self.L,
-                                           ctypes.py_object(executor),
-                                           ctypes.py_object(_callable_wrapper),
-                                           ctypes.py_object(val),
-                                           ctypes.c_long(val_id),
-                                           ctypes.py_object(executor.cycles))
+            store_python_capsule(self.L,
+                                 ctypes.py_object(_callable_wrapper),
+                                 ctypes.py_object(val),
+                                 ctypes.c_long(val_id),
+                                 ctypes.py_object(executor.cycles),
+                                 ctypes.py_object(executor))
 
             # assign the metatable of the userdata
-            lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CALLABLE_KEY)
+            lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)
             lua_setmetatable(self.L, -2)
 
             # consume the userdata with the metatable set

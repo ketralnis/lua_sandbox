@@ -17,95 +17,132 @@
 #define EXECUTOR_STR(s) #s
 
 
-l_runtime_limiter* new_runtime_limiter(lua_State *L, double max_runtime) {
-    clock_t now = clock();
+int install_control_block(lua_State *L, size_t max_memory) {
+    lua_control_block* control = malloc(sizeof(lua_control_block));
 
-    l_runtime_limiter* limiter =
-        (l_runtime_limiter*)lua_newuserdata(L, sizeof(l_runtime_limiter));
+    if(control==NULL) {
+        return 0;
+    }
 
-    limiter->start = now;
-    limiter->max_runtime = max_runtime;
-    // calculate the expires now so we don't have to do floating point
-    // arithmetic on every invocation
-    limiter->expires = (clock_t)(now+(double)max_runtime*(double)CLOCKS_PER_SEC);
+    void* old_ud = NULL;
+    lua_Alloc old_allocf = lua_getallocf(L, &old_ud);
 
-    lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_RUNTIME_LIMITER_KEY);
+    (control->memory).enabled = 0;
+    (control->memory).memory_used = 0;
+    (control->memory).memory_limit = max_memory;
+    (control->memory).old_allocf = old_allocf;
+    (control->memory).old_ud = old_ud;
+    (control->runtime).enabled = 0;
 
-    return limiter;
+#if LUA_VERSION_NUM == 501
+    control->panic_return = NULL;
+#endif
+
+    // it normally wouldn't be safe to change the allocator while the VM is
+    // running, but this is safe because we're just proxying on to the same one
+    // anyway
+    lua_setallocf(L, (lua_Alloc)l_alloc_restricted, (void*)control);
+
+    // now we abuse this control block to always be available from
+    // lua_getallocf
+
+    return 1;
 }
 
 
-void time_limiting_hook(lua_State *L, lua_Debug *_ar) {
-    // find the runtime limiter
+void wrapped_lua_close(lua_State *L) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
 
-    lua_pushstring(L, EXECUTOR_RUNTIME_LIMITER_KEY);
-    lua_gettable(L, LUA_REGISTRYINDEX);
+    // put the old allocator back. We have to put it back because Lua allocates
+    // in order to creates the *ud so if we don't put it back we leak that data.
+    // Note! Because we put it back, it's not safe to require access to the
+    // control block in areas that may run during cleanup. This includes in
+    // particular free_python_capsule.
+    lua_setallocf(L, (control->memory).old_allocf, (control->memory).old_ud);
 
-    if(lua_isnil(L, -1)) {
-        // limiting isn't turned on right now
-        lua_pop(L, 1); // remove the nil
-        return;
-    }
+    lua_close(L);
 
-    // otherwise the userdata is on the stack now
+    free(control);
+}
 
-    l_runtime_limiter* limiter = (l_runtime_limiter*)lua_touserdata(L, -1);
-    lua_pop(L, 1); // get the userdata back off the stack
+
+void start_runtime_limiter(lua_State *L, double max_runtime, int hz) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
 
     clock_t now = clock();
 
-    if(now > limiter->expires) {
+    if((control->runtime).enabled) {
+        fprintf(stderr, "runtime limiter was already enabled\n");
+    }
+
+    (control->runtime).enabled = 1;
+
+    (control->runtime).max_runtime = max_runtime;
+    // calculate the expires now so we don't have to do floating point
+    // arithmetic on every invocation
+    (control->runtime).expires =
+        (clock_t)(now+(double)max_runtime*(double)CLOCKS_PER_SEC);
+
+    lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, hz);
+
+#if LUA_VERSION_NUM == 501
+    // in order for that to apply to compiled code we have to turn off the
+    // compiler :( there's still some win because luajit's interpreter is
+    // still faster than canonical Lua's
+    luaJIT_setmode(L, 0, LUAJIT_MODE_ENGINE|LUAJIT_MODE_OFF);
+#endif
+}
+
+
+void finish_runtime_limiter(lua_State *L) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    if(!(control->runtime).enabled) {
+        fprintf(stderr, "runtime limiter was not enabled\n");
+    }
+
+    lua_sethook(L, NULL, 0, 0);
+
+#if LUA_VERSION_NUM == 501
+    // can turn this back on now. note that there's no luaJIT_getmode so we
+    // can't know if it was turned on before
+    luaJIT_setmode(L, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON);
+#endif
+
+    (control->runtime).enabled = 0;
+}
+
+
+static void time_limiting_hook(lua_State *L, lua_Debug *_ar) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    if(!(control->runtime).enabled) {
+        fprintf(stderr, "time_limiting_hook called with no limiter\n");
+        return;
+    }
+
+    clock_t now = clock();
+
+    if(now>(control->runtime).expires) {
         // they have gone on too long
 
         // calculate the duration so we can add it to the error message
-        clock_t dur_cl = now-limiter->start;
+        clock_t dur_cl = now-(control->runtime).start;
         double dur_s = (double)dur_cl/(double)CLOCKS_PER_SEC;
 
         luaL_error(L, "runtime quota exceeded %f>%f",
-                   dur_s, limiter->max_runtime);
+                   dur_s, (control->runtime).max_runtime);
         // unreachable
     }
 }
 
 
-void free_runtime_limiter(lua_State *L, l_runtime_limiter* runtime_limiter) {
-    // delete it from lua
-    lua_pushnil(L);
-    lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_RUNTIME_LIMITER_KEY);
-}
-
-
-l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory) {
-    void* old_ud = NULL;
-    lua_Alloc old_allocf = lua_getallocf(L, &old_ud);
-
-    l_alloc_limiter* limiter = malloc(sizeof(l_alloc_limiter));
-
-    if(limiter == NULL) {
-        return NULL;
-    }
-
-    limiter->old_ud = old_ud;
-    limiter->old_allocf = old_allocf;
-
-    limiter->memory_limit = max_memory;
-    limiter->memory_used = 0;
-    limiter->limit_allocation = 0;
-
-    return limiter;
-}
-
-
-void free_memory_limiter(lua_State *L, l_alloc_limiter* limiter) {
-    lua_setallocf(L, limiter->old_allocf,
-                  limiter->old_ud);
-
-    free(limiter);
-}
-
-
-void* l_alloc_restricted (l_alloc_limiter* limiter,
-                          void *ptr, size_t o_old_size, size_t new_size) {
+void* l_alloc_restricted(lua_control_block* control,
+                         void *ptr, size_t o_old_size, size_t new_size) {
     size_t old_size = o_old_size;
 
     if(ptr == NULL) {
@@ -119,42 +156,96 @@ void* l_alloc_restricted (l_alloc_limiter* limiter,
         old_size = 0;
     }
 
-    int enable_limiter = limiter->limit_allocation && limiter->memory_limit;
-
-    size_t new_total = limiter->memory_used;
+    size_t new_total = (control->memory).memory_used;
     new_total -= old_size;
     new_total += new_size;
 
-    if (enable_limiter
+    int kick_in = (control->memory).enabled
+        && (control->memory).memory_limit
+        // only if we're trying to grow (lua panics if we return NULL when
+        // shrinking)
+        && new_total>(control->memory).memory_used
         // we're using more than the limit
-        && new_total>limiter->memory_limit
-        // we're trying to grow (lua panics if we return NULL when shrinking)
-        && new_total>limiter->memory_used) {
+        && new_total>(control->memory).memory_limit;
 
+    if (kick_in) {
         /* too much memory in use */
         return NULL;
     }
 
-    ptr = limiter->old_allocf(limiter->old_ud, ptr, o_old_size, new_size);
+    ptr = (control->memory).old_allocf((control->memory).old_ud,
+                                       ptr, o_old_size, new_size);
 
     if (ptr) {
         /* reallocation successful */
-        limiter->memory_used = new_total;
+        (control->memory).memory_used = new_total;
     }
 
     return ptr;
 }
 
-void enable_limit_memory(l_alloc_limiter *limiter) {
-    if(limiter != NULL)
-        limiter->limit_allocation = 1;
+
+void enable_limit_memory(lua_State *L) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    (control->memory).enabled = 1;
 }
 
 
-void disable_limit_memory(l_alloc_limiter *limiter) {
-    if(limiter != NULL)
-        limiter->limit_allocation = 0;
+void disable_limit_memory(lua_State *L) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    (control->memory).enabled = 0;
 }
+
+
+#if LUA_VERSION_NUM == 501
+
+static int memory_panicer (lua_State *L) {
+    // if we're out of memory, this might not even work
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    jmp_buf *jb = control->panic_return;
+
+    longjmp(*jb, 1);
+
+    return 0; // unreachable
+}
+
+int memory_safe_pcallk(lua_State *L, int nargs, int nresults, int _msgh) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    jmp_buf jb;
+
+    jmp_buf* old_panic_return = control->panic_return;
+    control->panic_return = &jb;
+
+    lua_CFunction old_panicer = lua_atpanic(L, memory_panicer);
+
+    int i_excepted = setjmp(jb);
+    int ret;
+
+    if(i_excepted == 0) {
+        // try
+        ret = lua_pcall(L, nargs, nresults, 0);
+
+    } else {
+        // except (the memory_panicer ran)
+        ret = LUA_ERRMEM;
+    }
+
+    // restore the old ones
+    lua_atpanic(L, old_panicer);
+    control->panic_return = old_panic_return;
+
+    return ret;
+}
+
+#endif
 
 
 int call_python_function_from_lua(lua_State *L) {
@@ -163,31 +254,25 @@ int call_python_function_from_lua(lua_State *L) {
     // real Python function in one that does argument handling and give that one
     // to us
 
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
     // make sure it's actually one of our userdatas before doing anything else
-    python_callable *callable =
-        (python_callable*)luaL_checkudata(L, 1, EXECUTOR_LUA_CALLABLE_KEY);
-    luaL_argcheck(L, callable != NULL, 1, "pyfunction expected"); // can longjmp out
-
-    // find the allocation limiter so we can disable it
-    lua_pushstring(L, EXECUTOR_MEMORY_LIMITER_KEY);
-    lua_gettable(L, LUA_REGISTRYINDEX);
-
-    // there's a chance that this is nil
-    l_alloc_limiter *limiter =
-        (l_alloc_limiter*)lua_touserdata(L, -1);
-    lua_pop(L, 1); // get the userdata back off the stack
+    lua_capsule *capsule =
+        (lua_capsule*)luaL_checkudata(L, 1, EXECUTOR_LUA_CAPSULE_KEY);
+    luaL_argcheck(L, capsule != NULL, 1, "python capsule expected"); // can longjmp out
 
     // once we hold the GIL it's vital that we turn off the allocation checking
     // because any allocation failure will longjmp out and we'll have no chance
     // to release it
-    if(limiter!=NULL) limiter->limit_allocation = 0;
+    disable_limit_memory(L);
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
-    PyObject* ret = PyObject_CallFunctionObjArgs(callable->callable,
-                                                 callable->executor,
-                                                 callable->val,
+    PyObject* ret = PyObject_CallFunctionObjArgs(capsule->call_proxy,
+                                                 capsule->executor,
+                                                 capsule->val,
                                                  NULL);
 
     if(ret == NULL) {
@@ -223,7 +308,7 @@ int call_python_function_from_lua(lua_State *L) {
 
         // release the gil
         PyGILState_Release(gstate);
-        if(limiter!=NULL) limiter->limit_allocation = 1;
+        enable_limit_memory(L);
 
         // raise the error on the lua side (longjmps out)
         lua_error(L);
@@ -236,94 +321,46 @@ int call_python_function_from_lua(lua_State *L) {
         Py_DECREF(ret);
 
         PyGILState_Release(gstate);
-        if(limiter != NULL) limiter->limit_allocation = 1;
+        enable_limit_memory(L);
 
         // we have no idea how long that call may have taken, so check this
         // hook just in case
-        time_limiting_hook(L, NULL); // may not return
+        if((control->runtime).enabled) {
+            time_limiting_hook(L, NULL); // may not return
+        }
 
         return 1; // one return value that the wrapper left on the stack
     }
 }
 
 
-#if LUA_VERSION_NUM == 501
-
-static int memory_panicer (lua_State *L) {
-    // if we're out of memory, this might not even work
-    lua_getfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
-    jmp_buf *jb = lua_touserdata(L, -1);
-    lua_pop(L, 1);
-
-    longjmp(*jb, 1);
-
-    return 0; // unreachable
-}
-
-int memory_safe_pcallk(lua_State *L, int nargs, int nresults, int _msgh) {
-    jmp_buf jb;
-
-    int i_excepted = setjmp(jb);
-    int ret;
-
-    lua_CFunction oldppanicer = lua_atpanic(L, memory_panicer);
-
-    if(i_excepted == 0) {
-        // try
-
-        // there's only one of these globals which keeps us from being safely
-        // recursive
-        lua_pushlightuserdata(L, &jb);
-        lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
-
-        ret = lua_pcall(L, nargs, nresults, 0);
-
-        lua_pushnil(L);
-        lua_setfield(L, LUA_REGISTRYINDEX, EXECUTOR_JMP_RETURN_KEY);
-
-    } else {
-        // except (the memory_panicer ran)
-
-        ret = LUA_ERRMEM;
-    }
-
-    // restore the old one
-    lua_atpanic(L, oldppanicer);
-
-    return ret;
-}
-
-#endif
-
-
-void store_python_callable(lua_State *L,
-                           PyObject* executor,
-                           PyObject* callable,
-                           PyObject* val,
-                           long cycle_key,
-                           PyDictObject* cycles) {
+void store_python_capsule(lua_State *L,
+                          PyObject* call_proxy,
+                          PyObject* val,
+                          long cycle_key,
+                          PyDictObject* cycles,
+                          PyObject* executor) {
     // our caller already added us to cycles so we don't have to worry about
     // it here
-    python_callable* freeable =
-        (python_callable*)lua_newuserdata(L, sizeof(python_callable));
+    lua_capsule* capsule =
+        (lua_capsule*)lua_newuserdata(L, sizeof(lua_capsule));
 
-    // we don't hold the GIL so we can't do anything but store pointers
-
-    freeable->executor = executor;
-    freeable->callable = callable;
-    freeable->val = val;
-    freeable->cycle_key = cycle_key;
-    // note that we don't have to worry about refcounting this dict because it
-    // is guaranteed to outlive the lua_State
-    freeable->cycles = cycles;
+    // we don't hold the GIL so we can't do anything but store pointers. note
+    // that we explicitly are not refcounting here: we rely on `cycles` to keep
+    // us live
+    capsule->call_proxy = call_proxy;
+    capsule->val = val;
+    capsule->cycle_key = cycle_key;
+    capsule->cycles = cycles;
+    capsule->executor = executor;
 }
 
 
-int free_python_callable(lua_State *L) {
-    python_callable* freeable =
-        (python_callable*)luaL_checkudata(L, 1, EXECUTOR_LUA_CALLABLE_KEY);
+int free_python_capsule(lua_State *L) {
+    lua_capsule* capsule =
+        (lua_capsule*)luaL_checkudata(L, 1, EXECUTOR_LUA_CAPSULE_KEY);
     // can longjmp out
-    luaL_argcheck(L, freeable != NULL, 1, "pyfunction expected");
+    luaL_argcheck(L, capsule != NULL, 1, "python capsule expected");
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -332,16 +369,16 @@ int free_python_callable(lua_State *L) {
 
     PyObject *list=NULL, *key=NULL, *popped=NULL;
 
-    key = PyLong_FromLong(freeable->cycle_key);
+    key = PyLong_FromLong(capsule->cycle_key);
     if(key == NULL) {
-        PyErr_WarnEx(NULL, "free_python_callable couldn't make key", 0);
+        PyErr_WarnEx(NULL, "free_python_capsule couldn't make key", 0);
         PyErr_Print(); // we can't really raise exceptions here
         goto error;
     }
 
-    list = PyDict_GetItem((PyObject*)freeable->cycles, key);
+    list = PyDict_GetItem((PyObject*)capsule->cycles, key);
     if(list == NULL || !PyList_Check(list) || PyList_GET_SIZE(list)==0) {
-        PyErr_WarnEx(NULL, "free_python_callable dangling reference", 0);
+        PyErr_WarnEx(NULL, "free_python_capsule dangling reference", 0);
         PyErr_Print(); // we can't really raise exceptions here
         goto error;
     }
@@ -349,16 +386,16 @@ int free_python_callable(lua_State *L) {
     // it doesn't really matter which reference we pop
     popped = PyObject_CallMethod(list, "pop", NULL);
     if(popped == NULL) {
-        PyErr_WarnEx(NULL, "free_python_callable couldn't pop", 0);
+        PyErr_WarnEx(NULL, "free_python_capsule couldn't pop", 0);
         PyErr_Print(); // we can't really raise exceptions here
         goto error;
     }
 
     if(PyList_GET_SIZE(list)==0) {
         // we emptied it out, so remove the entry entirely
-        int del_ret = PyDict_DelItem((PyObject*)freeable->cycles, key);
+        int del_ret = PyDict_DelItem((PyObject*)capsule->cycles, key);
         if(del_ret==-1) {
-            PyErr_WarnEx(NULL, "free_python_callable couldn't delitem", 0);
+            PyErr_WarnEx(NULL, "free_python_capsule couldn't delitem", 0);
             PyErr_Print(); // we can't really raise exceptions here
             goto error;
         }
@@ -376,12 +413,12 @@ error:
 }
 
 
-PyObject* decapsule(python_callable* callable) {
+PyObject* decapsule(lua_capsule* capsule) {
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
-    PyObject* ret = callable->val;
-    Py_INCREF(ret);
+    PyObject* ret = capsule->val;
+    Py_INCREF(ret); // the caller gets a new reference
 
     PyGILState_Release(gstate);
 

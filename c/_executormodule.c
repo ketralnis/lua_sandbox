@@ -76,11 +76,8 @@ void free_runtime_limiter(lua_State *L, l_runtime_limiter* runtime_limiter) {
 
 
 l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory) {
-
-#if LUA_VERSION_NUM == 501
     void* old_ud = NULL;
     lua_Alloc old_allocf = lua_getallocf(L, &old_ud);
-#endif
 
     l_alloc_limiter* limiter = malloc(sizeof(l_alloc_limiter));
 
@@ -88,10 +85,8 @@ l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory) {
         return NULL;
     }
 
-#if LUA_VERSION_NUM == 501
     limiter->old_ud = old_ud;
     limiter->old_allocf = old_allocf;
-#endif
 
     limiter->memory_limit = max_memory;
     limiter->memory_used = 0;
@@ -102,15 +97,8 @@ l_alloc_limiter* new_memory_limiter(lua_State* L, size_t max_memory) {
 
 
 void free_memory_limiter(lua_State *L, l_alloc_limiter* limiter) {
-
-#if LUA_VERSION_NUM == 501
-
-    if(limiter!=NULL) {
-        lua_setallocf(L, limiter->old_allocf,
-                      limiter->old_ud);
-    }
-
-#endif
+    lua_setallocf(L, limiter->old_allocf,
+                  limiter->old_ud);
 
     free(limiter);
 }
@@ -147,12 +135,7 @@ void* l_alloc_restricted (l_alloc_limiter* limiter,
         return NULL;
     }
 
-#if LUA_VERSION_NUM == 501
     ptr = limiter->old_allocf(limiter->old_ud, ptr, o_old_size, new_size);
-
-#else
-    ptr = realloc(ptr, new_size);
-#endif
 
     if (ptr) {
         /* reallocation successful */

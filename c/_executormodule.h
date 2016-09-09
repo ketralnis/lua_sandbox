@@ -24,10 +24,8 @@ typedef struct {
     int limit_allocation;
     size_t memory_used;
     size_t memory_limit;
-#if LUA_VERSION_NUM == 501
     lua_Alloc old_allocf;
     void* old_ud;
-#endif
 } l_alloc_limiter;
 
 typedef struct {

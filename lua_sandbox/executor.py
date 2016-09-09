@@ -238,31 +238,16 @@ class Lua(object):
     def __init__(self, max_memory=MAX_MEMORY_DEFAULT, name=None):
         self.name = name or "%s[%s]" % (self.__class__.__name__, id(self))
 
-        # build up the state according to the right version
-        if max_memory in (0, None):
-            # the easy case: they won't want memory limiting
-            self.L = luaL_newstate()
-            self.L = ctypes.c_void_p(self.L)  # save us casts later
-            self.memory_limiter = None
+        max_memory = max_memory or 0
 
-        elif _executor.LUA_VERSION_NUM == 501:
-            # luajit
-            self.L = luaL_newstate()
-            self.L = ctypes.c_void_p(self.L)  # save us casts later
+        self.L = luaL_newstate()
+        self.L = ctypes.c_void_p(self.L)  # save us casts later
 
-            memory_limiter = executor_new_memory_limiter(self.L, max_memory)
-            self.memory_limiter = ctypes.c_void_p(memory_limiter)
-            lua_setallocf(self.L,
-                          executor_l_alloc_restricted,
-                          self.memory_limiter)
-
-        else:
-            # everything else
-            memory_limiter = executor_new_memory_limiter(None, max_memory)
-            self.memory_limiter = ctypes.c_void_p(memory_limiter)
-            self.L = lua_newstate(executor_l_alloc_restricted,
-                                  self.memory_limiter)
-            self.L = ctypes.c_void_p(self.L)  # save us casts later
+        memory_limiter = executor_new_memory_limiter(self.L, max_memory)
+        self.memory_limiter = ctypes.c_void_p(memory_limiter)
+        lua_setallocf(self.L,
+                      executor_l_alloc_restricted,
+                      self.memory_limiter)
 
         self.install_memory_limiter()
 
@@ -286,14 +271,12 @@ class Lua(object):
         # hold on to this for __del__
         self.cleanup_cache = dict(
             lua_close = lua_close,
+            executor_free_memory_limiter = executor_free_memory_limiter,
         )
 
     @check_stack(2, 0)
     def install_memory_limiter(self):
         # n.b. this is global across the whole VM
-
-        if not self.memory_limiter:
-            return
 
         lua_pushstring(self.L, EXECUTOR_MEMORY_LIMITER_KEY)
         lua_pushlightuserdata(self.L, self.memory_limiter)
@@ -428,7 +411,8 @@ class Lua(object):
 
     def __del__(self):
         if self.L:
-            executor_free_memory_limiter(self.L, self.memory_limiter)
+            self.cleanup_cache['executor_free_memory_limiter'](
+                self.L, self.memory_limiter)
             self.cleanup_cache['lua_close'](self.L)
 
 

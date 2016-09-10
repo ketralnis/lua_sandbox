@@ -287,6 +287,10 @@ class TestSafeguards(TestLuaExecution):
             return 1
         """)
 
+    def test_memory_used(self):
+        self.ex.lua['some_var'] = '*'*(1024*1024)
+        self.assertGreater(self.ex.lua.memory_used, 1024*1024)
+
     def test_timeout(self):
         def _tester(program):
             start_time = time.time()

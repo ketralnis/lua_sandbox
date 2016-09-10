@@ -111,6 +111,8 @@ start_runtime_limiter = executor_lib.start_runtime_limiter
 start_runtime_limiter.restype = None
 finish_runtime_limiter = executor_lib.finish_runtime_limiter
 finish_runtime_limiter.restype = None
+get_memory_used = executor_lib.get_memory_used
+get_memory_used.restype = ctypes.c_size_t
 enable_limit_memory = executor_lib.enable_limit_memory
 enable_limit_memory.restype = None
 disable_limit_memory = executor_lib.disable_limit_memory
@@ -228,12 +230,12 @@ MAX_RUNTIME_DEFAULT = 2.0 # (in seconds)
 MAX_RUNTIME_HZ_DEFAULT = 500*1000 # how often to check (in "lua instructions")
 
 class Lua(object):
-    __slots__ = ['L', 'memory_limiter', 'cleanup_cache', 'name', 'cycles']
+    __slots__ = ['L', 'max_memory', 'cleanup_cache', 'name', 'cycles']
 
     def __init__(self, max_memory=MAX_MEMORY_DEFAULT, name=None):
         self.name = name or "%s[%s]" % (self.__class__.__name__, id(self))
 
-        max_memory = max_memory or 0
+        self.max_memory = max_memory = max_memory or 0
 
         # If every time we hold a reference in Lua land to an object in Python
         # land we do the obvious incref/decref pair we end up with reference
@@ -335,6 +337,10 @@ class Lua(object):
 
     def __getitem__(self, key):
         return self.get_global(key)
+
+    @property
+    def memory_used(self):
+        return get_memory_used(self.L)
 
     @check_stack(1, 0)
     def load(self, code, desc=None, mode="t"):
@@ -573,7 +579,10 @@ class LuaValue(object):
             raise LuaStateException(self.executor)
 
         elif pcall_ret == _executor.LUA_ERRMEM:
-            raise LuaOutOfMemoryException("__call__")
+            raise LuaOutOfMemoryException("%.2fmb > %.2fmb (%dc)"
+                                          % (self.executor.memory_used/1024.0/1024.0,
+                                             self.executor.max_memory/1024.0/1024.0,
+                                             len(self.executor.cycles)))
 
         else:
             raise LuaException("Unknown return value from lua_pcallk: %r"

@@ -186,6 +186,14 @@ void* l_alloc_restricted(lua_control_block* control,
 }
 
 
+size_t get_memory_used(lua_State *L) {
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+
+    return (control->memory).memory_used;
+}
+
+
 void enable_limit_memory(lua_State *L) {
     lua_control_block *control = NULL;
     (void*)lua_getallocf(L, (void*)&control);

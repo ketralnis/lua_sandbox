@@ -55,6 +55,7 @@ void start_runtime_limiter(lua_State*, double max_runtime, int hz);
 void finish_runtime_limiter(lua_State*);
 static void time_limiting_hook(lua_State*, lua_Debug *_ar);
 void* l_alloc_restricted (lua_control_block*,void*, size_t, size_t);
+size_t get_memory_used(lua_State *L);
 void enable_limit_memory(lua_State *L);
 void disable_limit_memory(lua_State *L);
 int call_python_function_from_lua(lua_State *L);

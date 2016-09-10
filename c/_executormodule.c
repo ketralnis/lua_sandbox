@@ -79,6 +79,7 @@ void start_runtime_limiter(lua_State *L, double max_runtime, int hz) {
 
     (control->runtime).enabled = 1;
 
+    (control->runtime).start = now;
     (control->runtime).max_runtime = max_runtime;
     // calculate the expires now so we don't have to do floating point
     // arithmetic on every invocation

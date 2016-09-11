@@ -274,6 +274,9 @@ int call_python_function_from_lua(lua_State *L) {
     PyObject* call_proxy = lua_touserdata(L, lua_upvalueindex(1));
     luaL_argcheck(L, call_proxy != NULL, -1, "upvalue missing?");
 
+    PyObject* executor = lua_touserdata(L, lua_upvalueindex(2));
+    luaL_argcheck(L, executor != NULL, -1, "upvalue missing?");
+
     // once we hold the GIL it's vital that we turn off the allocation checking
     // because any allocation failure will longjmp out and we'll have no chance
     // to release it
@@ -283,7 +286,7 @@ int call_python_function_from_lua(lua_State *L) {
     gstate = PyGILState_Ensure();
 
     PyObject* ret = PyObject_CallFunction(call_proxy, "OO",
-                                          capsule->executor,
+                                          executor,
                                           capsule->val);
 
     if(ret == NULL) {
@@ -352,8 +355,7 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
 
 void store_python_capsule(lua_State *L,
                           PyObject* val,
-                          long cycle_key,
-                          PyObject* executor) {
+                          long cycle_key) {
     // our caller already added us to cycles so we don't have to worry about
     // it here
     lua_capsule* capsule =
@@ -364,7 +366,6 @@ void store_python_capsule(lua_State *L,
     // us live
     capsule->val = val;
     capsule->cycle_key = cycle_key;
-    capsule->executor = executor;
 }
 
 
@@ -449,6 +450,9 @@ int lazy_capsule_index(lua_State *L) {
     PyObject* index_proxy = lua_touserdata(L, lua_upvalueindex(1));
     luaL_argcheck(L, index_proxy != NULL, -1, "upvalue missing?");
 
+    PyObject* executor = lua_touserdata(L, lua_upvalueindex(2));
+    luaL_argcheck(L, executor != NULL, -1, "upvalue missing?");
+
     // upvalue[1] points to the Python proxy function for extracting the key,
     // args[-2] points to the capsule struct, and args[-1] is the index to the
     // key they are trying to look up
@@ -459,7 +463,7 @@ int lazy_capsule_index(lua_State *L) {
     gstate = PyGILState_Ensure();
 
     PyObject* ret = PyObject_CallFunction(index_proxy, "OOi",
-                                          capsule->executor,
+                                          executor,
                                           capsule->val,
                                           -1);
 

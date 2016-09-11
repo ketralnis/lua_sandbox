@@ -295,12 +295,14 @@ class Lua(object):
 
         # and call them
         lua_pushlightuserdata(self.L, ctypes.py_object(_callable_wrapper))
-        lua_pushcclosure(self.L, call_python_function_from_lua, 1)
+        lua_pushlightuserdata(self.L, ctypes.py_object(self))
+        lua_pushcclosure(self.L, call_python_function_from_lua, 2)
         lua_setfield(self.L, -2, '__call')
 
         # and index them
         lua_pushlightuserdata(self.L, ctypes.py_object(_indexable_wrapper))
-        lua_pushcclosure(self.L, lazy_capsule_index, 1)
+        lua_pushlightuserdata(self.L, ctypes.py_object(self))
+        lua_pushcclosure(self.L, lazy_capsule_index, 2)
         lua_setfield(self.L, -2, '__index')
 
         lua_pushstring(self.L, "capsule")
@@ -769,8 +771,7 @@ class LuaValue(object):
             # the stack)
             store_python_capsule(self.L,
                                  ctypes.py_object(val),
-                                 ctypes.c_long(val_id),
-                                 ctypes.py_object(executor))
+                                 ctypes.c_long(val_id))
 
             # assign the metatable of the userdata
             lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)

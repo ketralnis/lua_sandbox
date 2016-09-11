@@ -34,7 +34,6 @@ typedef struct {
 typedef struct {
     PyObject* val;
     long cycle_key;
-    PyObject* executor;
 } lua_capsule;
 
 typedef struct {
@@ -57,7 +56,7 @@ size_t get_memory_used(lua_State *L);
 void enable_limit_memory(lua_State *L);
 void disable_limit_memory(lua_State *L);
 int call_python_function_from_lua(lua_State *L);
-void store_python_capsule(lua_State*,PyObject*,long,PyObject*);
+void store_python_capsule(lua_State*,PyObject*,long);
 int free_python_capsule(lua_State *L);
 PyObject* decapsule(lua_capsule* capsule);
 int lazy_capsule_index(lua_State*);

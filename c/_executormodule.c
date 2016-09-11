@@ -279,67 +279,71 @@ int call_python_function_from_lua(lua_State *L) {
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
-    PyObject* ret = PyObject_CallFunctionObjArgs(capsule->call_proxy,
-                                                 capsule->executor,
-                                                 capsule->val,
-                                                 NULL);
+    PyObject* ret = PyObject_CallFunction(capsule->call_proxy, "OO",
+                                          capsule->executor,
+                                          capsule->val);
 
     if(ret == NULL) {
-        // there will be a Python exception on the stack. Translate it into a
-        // Lua exception and clear it
-
-        PyObject *ptype=NULL, *pvalue=NULL, *ptraceback=NULL;
-        PyErr_Fetch(&ptype, &pvalue, &ptraceback);
-        PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
-        PyErr_Clear();
-
-        char* error_message = "unknown error executing Python code";
-
-        PyObject* repr = PyObject_Repr(pvalue);
-        if(repr == NULL) {
-            // fine we just won't use it then
-            PyErr_WarnEx(NULL, "call_python_function_from_lua couldn't make repr", 0);
-            PyErr_Print();
-            PyErr_Clear();
-        } else if(!PyString_CheckExact(repr)) {
-            // if repr doesn't return a string we can't use it
-            PyErr_WarnEx(NULL, "got non string from PyObject_Repr", 0);
-        } else {
-            error_message = PyString_AsString(repr);
-        }
-
-        lua_pushstring(L, error_message);
-
-        Py_XDECREF(repr);
-        Py_XDECREF(ptype);
-        Py_XDECREF(pvalue);
-        Py_XDECREF(ptraceback);
-
-        // release the gil
-        PyGILState_Release(gstate);
-        enable_limit_memory(L);
-
-        // raise the error on the lua side (longjmps out)
-        lua_error(L);
-
-        return 0; // unreachable
-
-    } else {
-        // otherwise we were successful and the return value is now at the top
-        // of the stack
-        Py_DECREF(ret);
-
-        PyGILState_Release(gstate);
-        enable_limit_memory(L);
-
-        // we have no idea how long that call may have taken, so check this
-        // hook just in case
-        if((control->runtime).enabled) {
-            time_limiting_hook(L, NULL); // may not return
-        }
-
-        return 1; // one return value that the wrapper left on the stack
+        // fixes the memory limiter and the GIL too
+        return translate_python_exception(L, gstate);
     }
+
+    // otherwise we were successful and the return value is now at the top
+    // of the stack
+
+    Py_DECREF(ret);
+    PyGILState_Release(gstate);
+    enable_limit_memory(L);
+
+    // we have no idea how long that call may have taken, so check this
+    // hook just in case
+    if((control->runtime).enabled) {
+        time_limiting_hook(L, NULL); // may not return
+    }
+
+    return 1; // one return value that the wrapper left on the stack
+}
+
+
+static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
+    // there will be a Python exception on the stack. Translate it into a
+    // Lua exception and clear it
+
+    PyObject *ptype=NULL, *pvalue=NULL, *ptraceback=NULL;
+    PyErr_Fetch(&ptype, &pvalue, &ptraceback);
+    PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
+    PyErr_Clear();
+
+    char* error_message = "unknown error executing Python code";
+
+    PyObject* repr = PyObject_Repr(pvalue);
+    if(repr == NULL) {
+        // fine we just won't use it then
+        PyErr_WarnEx(NULL, "call_python_function_from_lua couldn't make repr", 0);
+        PyErr_Print();
+        PyErr_Clear();
+    } else if(!PyString_CheckExact(repr)) {
+        // if repr doesn't return a string we can't use it
+        PyErr_WarnEx(NULL, "got non string from PyObject_Repr", 0);
+    } else {
+        error_message = PyString_AsString(repr);
+    }
+
+    lua_pushstring(L, error_message);
+
+    Py_XDECREF(repr);
+    Py_XDECREF(ptype);
+    Py_XDECREF(pvalue);
+    Py_XDECREF(ptraceback);
+
+    // release the gil
+    PyGILState_Release(gstate);
+    enable_limit_memory(L);
+
+    // raise the error on the lua side (longjmps out)
+    lua_error(L);
+
+    return 0; // unreachable
 }
 
 
@@ -432,6 +436,44 @@ PyObject* decapsule(lua_capsule* capsule) {
     PyGILState_Release(gstate);
 
     return ret;
+}
+
+
+int lazy_capsule_index(lua_State *L) {
+    lua_capsule *capsule =
+        (lua_capsule*)luaL_checkudata(L, 1, EXECUTOR_LUA_CAPSULE_KEY);
+    luaL_argcheck(L, capsule != NULL, 1, "python capsule expected"); // can longjmp out
+
+    PyObject* index_proxy = lua_touserdata(L, lua_upvalueindex(1));
+    luaL_argcheck(L, index_proxy != NULL, -1, "upvalue missing?");
+
+    // upvalue[1] points to the Python proxy function for extracting the key,
+    // args[-2] points to the capsule struct, and args[-1] is the index to the
+    // key they are trying to look up
+
+    disable_limit_memory(L);
+
+    PyGILState_STATE gstate;
+    gstate = PyGILState_Ensure();
+
+    PyObject* ret = PyObject_CallFunction(index_proxy, "OOi",
+                                          capsule->executor,
+                                          capsule->val,
+                                          -1);
+
+    // he either raises an exception or leaves the result at the top of the Lua
+    // stack
+    if(ret == NULL) {
+        // fixes the memory limiter and the GIL too
+        return translate_python_exception(L, gstate);
+    }
+
+    Py_DECREF(ret);
+
+    PyGILState_Release(gstate);
+    enable_limit_memory(L);
+
+    return 1;
 }
 
 

@@ -174,6 +174,16 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(success, [orig])
         self.assertEqual(ret, (orig,))
 
+    def test_capsule_index(self):
+        data = {'foo': 5, 'bar': {'baz': 10}, 'str1': 'str2'}
+
+        program = """
+            return data.foo, data.bar.baz, data.str1, data.notthere
+        """
+
+        ret = self.ex.execute(program, {'data': Capsule(data)})
+        self.assertEqual(ret, (5.0, 10.0, 'str2', None))
+
     def test_function_noargs(self):
         program = """
             return foo()

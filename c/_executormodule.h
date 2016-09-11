@@ -62,6 +62,8 @@ int call_python_function_from_lua(lua_State *L);
 void store_python_capsule(lua_State*,PyObject*,PyObject*,long,PyDictObject*,PyObject*);
 int free_python_capsule(lua_State *L);
 PyObject* decapsule(lua_capsule* capsule);
+int lazy_capsule_index(lua_State*);
+static int translate_python_exception(lua_State*, PyGILState_STATE);
 
 #if LUA_VERSION_NUM == 501
 static int memory_panicer (lua_State *L);

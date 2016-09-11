@@ -125,6 +125,8 @@ free_python_capsule = executor_lib.free_python_capsule
 free_python_capsule.restype = ctypes.c_int
 decapsule = executor_lib.decapsule
 decapsule.restype = ctypes.py_object
+lazy_capsule_index = executor_lib.lazy_capsule_index
+lazy_capsule_index.restype = ctypes.c_int
 
 # function types
 lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
@@ -159,7 +161,6 @@ if _executor.LUA_VERSION_NUM == 501:
     def lua_setglobal(L, s):
         return lua_setfield(L, _executor.LUA_GLOBALSINDEX, s)
 
-
     luaJIT_setmode = lua_lib.luaJIT_setmode
 
 elif _executor.LUA_VERSION_NUM in (502, 503):
@@ -170,7 +171,6 @@ elif _executor.LUA_VERSION_NUM in (502, 503):
     lua_getglobal.restype = None
     lua_setglobal = lua_lib.lua_setglobal
     lua_setglobal.restype = None
-
 
 else:
     raise ImportError("I don't know LUA_VERSION_NUM %r", _executor.LUA_VERSION_NUM)
@@ -258,7 +258,7 @@ class Lua(object):
             raise LuaOutOfMemoryException("couldn't allocate control block")
 
         luaL_openlibs(self.L)
-        self.install_python_callable()
+        self.install_python_capsule()
 
         # hold on to this for __del__
         self.cleanup_cache = dict(
@@ -283,7 +283,7 @@ class Lua(object):
             finish_runtime_limiter(self.L)
 
     @check_stack(3, 0)
-    def install_python_callable(self):
+    def install_python_capsule(self):
         # we create a global metatable to act as a prototype that contains our
         # methods
         luaL_newmetatable(self.L, EXECUTOR_LUA_CAPSULE_KEY)
@@ -295,6 +295,11 @@ class Lua(object):
         # and call them
         lua_pushcclosure(self.L, call_python_function_from_lua, 0)
         lua_setfield(self.L, -2, '__call')
+
+        # and index them
+        lua_pushlightuserdata(self.L, ctypes.py_object(_indexable_wrapper))
+        lua_pushcclosure(self.L, lazy_capsule_index, 1)
+        lua_setfield(self.L, -2, '__index')
 
         lua_pushstring(self.L, "capsule")
         lua_setfield(self.L, -2, "capsule")
@@ -799,6 +804,26 @@ def _callable_wrapper(executor, val):
     as_lua._bring_to_top(False)
 
 
+def _indexable_wrapper(executor, indexable, index_idx):
+    index_lua = LuaValue(executor, abs_index(executor.L, index_idx))
+    index_python = index_lua.to_python()
+
+    try:
+        found_python = indexable[index_python]
+    except KeyError:
+        # lua uses nil for KeyError
+        return lua_pushnil(executor.L)
+
+    # if it's a dict, continue the laziness
+    if isinstance(found_python, dict):
+        lv = LuaValue.from_python(executor, Capsule(found_python))
+        return lv._bring_to_top(False)
+
+    # otherwise try to serialise the value the normal way
+    lv = LuaValue.from_python(executor, found_python)
+    return lv._bring_to_top(False)
+
+
 class Capsule(object):
     """
     A container for passing Python objects through Lua unmolested
@@ -905,4 +930,3 @@ class SandboxedExecutor(object):
                     raise LuaException("couldn't set upvalue?")
 
         return loaded
-

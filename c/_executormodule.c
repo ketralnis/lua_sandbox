@@ -177,8 +177,8 @@ void* l_alloc_restricted(lua_control_block* control,
     ptr = (control->memory).old_allocf((control->memory).old_ud,
                                        ptr, o_old_size, new_size);
 
-    if (ptr) {
-        /* reallocation successful */
+    if (ptr || new_size==0) {
+        /* reallocation successful (free is always successful) */
         (control->memory).memory_used = new_total;
     }
 

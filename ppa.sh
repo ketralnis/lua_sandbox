@@ -48,7 +48,7 @@ confirm_or_die "building package by $AUTHOR is that you?" \
 if ! gpg -K | fgrep "$AUTHOR"; then
     echo "gpg key for $AUTHOR not found in ~/.gnupg/secring.gpg"
     echo "here's a handy snippet for vagrant:"
-    echo "    (cd ~ && tar -cvf - .gnupg) | vagrant ssh -c 'cd ~ && tar -xvf -'"
+    echo "    (cd ~ && tar -cf - .gnupg) | vagrant ssh -c 'cd ~ && tar -xvf -'"
     exit 1
 fi
 

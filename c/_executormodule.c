@@ -271,6 +271,9 @@ int call_python_function_from_lua(lua_State *L) {
         (lua_capsule*)luaL_checkudata(L, 1, EXECUTOR_LUA_CAPSULE_KEY);
     luaL_argcheck(L, capsule != NULL, 1, "python capsule expected"); // can longjmp out
 
+    PyObject* call_proxy = lua_touserdata(L, lua_upvalueindex(1));
+    luaL_argcheck(L, call_proxy != NULL, -1, "upvalue missing?");
+
     // once we hold the GIL it's vital that we turn off the allocation checking
     // because any allocation failure will longjmp out and we'll have no chance
     // to release it
@@ -279,7 +282,7 @@ int call_python_function_from_lua(lua_State *L) {
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
-    PyObject* ret = PyObject_CallFunction(capsule->call_proxy, "OO",
+    PyObject* ret = PyObject_CallFunction(call_proxy, "OO",
                                           capsule->executor,
                                           capsule->val);
 
@@ -348,7 +351,6 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
 
 
 void store_python_capsule(lua_State *L,
-                          PyObject* call_proxy,
                           PyObject* val,
                           long cycle_key,
                           PyDictObject* cycles,
@@ -361,7 +363,6 @@ void store_python_capsule(lua_State *L,
     // we don't hold the GIL so we can't do anything but store pointers. note
     // that we explicitly are not refcounting here: we rely on `cycles` to keep
     // us live
-    capsule->call_proxy = call_proxy;
     capsule->val = val;
     capsule->cycle_key = cycle_key;
     capsule->cycles = cycles;

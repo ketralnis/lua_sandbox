@@ -289,7 +289,8 @@ class Lua(object):
         luaL_newmetatable(self.L, EXECUTOR_LUA_CAPSULE_KEY)
 
         # we need to be able to dealloc them
-        lua_pushcclosure(self.L, free_python_capsule, 0)
+        lua_pushlightuserdata(self.L, ctypes.py_object(self.cycles))
+        lua_pushcclosure(self.L, free_python_capsule, 1)
         lua_setfield(self.L, -2, '__gc')
 
         # and call them
@@ -769,7 +770,6 @@ class LuaValue(object):
             store_python_capsule(self.L,
                                  ctypes.py_object(val),
                                  ctypes.c_long(val_id),
-                                 ctypes.py_object(executor.cycles),
                                  ctypes.py_object(executor))
 
             # assign the metatable of the userdata

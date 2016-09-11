@@ -353,7 +353,6 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
 void store_python_capsule(lua_State *L,
                           PyObject* val,
                           long cycle_key,
-                          PyDictObject* cycles,
                           PyObject* executor) {
     // our caller already added us to cycles so we don't have to worry about
     // it here
@@ -365,7 +364,6 @@ void store_python_capsule(lua_State *L,
     // us live
     capsule->val = val;
     capsule->cycle_key = cycle_key;
-    capsule->cycles = cycles;
     capsule->executor = executor;
 }
 
@@ -375,6 +373,9 @@ int free_python_capsule(lua_State *L) {
         (lua_capsule*)luaL_checkudata(L, 1, EXECUTOR_LUA_CAPSULE_KEY);
     // can longjmp out
     luaL_argcheck(L, capsule != NULL, 1, "python capsule expected");
+
+    PyObject* cycles = lua_touserdata(L, lua_upvalueindex(1));
+    luaL_argcheck(L, cycles != NULL, -1, "upvalue missing?");
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -390,7 +391,7 @@ int free_python_capsule(lua_State *L) {
         goto error;
     }
 
-    list = PyDict_GetItem((PyObject*)capsule->cycles, key);
+    list = PyDict_GetItem(cycles, key);
     if(list == NULL || !PyList_Check(list) || PyList_GET_SIZE(list)==0) {
         PyErr_WarnEx(NULL, "free_python_capsule dangling reference", 0);
         PyErr_Print(); // we can't really raise exceptions here
@@ -407,7 +408,7 @@ int free_python_capsule(lua_State *L) {
 
     if(PyList_GET_SIZE(list)==0) {
         // we emptied it out, so remove the entry entirely
-        int del_ret = PyDict_DelItem((PyObject*)capsule->cycles, key);
+        int del_ret = PyDict_DelItem(cycles, key);
         if(del_ret==-1) {
             PyErr_WarnEx(NULL, "free_python_capsule couldn't delitem", 0);
             PyErr_Print(); // we can't really raise exceptions here

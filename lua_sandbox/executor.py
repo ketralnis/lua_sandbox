@@ -415,7 +415,7 @@ class LuaValue(object):
             LUA_REGISTRYINDEX=_executor.LUA_REGISTRYINDEX,
         )
 
-        if cycle_id:
+        if cycle_id is not None:
             # added here, removed in _executormodule.c:free_python_capsule
             self.executor.cycles.setdefault(id(cycle_id), []).append(cycle_id)
             self.cycle_id = id(cycle_id)

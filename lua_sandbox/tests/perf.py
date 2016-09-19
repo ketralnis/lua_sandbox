@@ -42,6 +42,35 @@ def simple_test(times):
     print 'simple_test', ti.timeit(number=times)
 
 
+def limiter_test(times):
+    """
+    See how we fare with the runtime limiter enabled
+
+    luajit suffers particularly under this one
+    """
+
+    lua_code = """
+        return string.find(thing.body, "http")
+    """
+    lua = SandboxedExecutor()
+    loaded = lua.sandboxed_load(lua_code)
+    bodies = [
+        # one match one not match
+        {'body': 'http://foo.com', 'other_field': {'something': 'else'}},
+        {'body': 'ooh lah lah!', 'other_field': {'something': 'else'}},
+    ]
+
+    def the_test():
+        for x in bodies:
+            lua.sandbox['thing'] = x
+            with lua.limit_runtime(5.0):
+                loaded()
+            lua.sandbox['thing'] = None
+
+    ti = timeit.Timer(the_test)
+    print 'limiter_test', ti.timeit(number=times)
+
+
 def re_test(times):
     """
     See how we fare with calling Python functions
@@ -101,6 +130,7 @@ def main(times=100000):
         'simple_test': simple_test,
         're_test': re_test,
         'capsule_test': capsule_test,
+        'limiter_test': limiter_test,
     }
 
     for name, fn in sorted(tests.items()):

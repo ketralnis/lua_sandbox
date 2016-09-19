@@ -8,14 +8,16 @@ from lua_sandbox import _executor
 from lua_sandbox.utils import datafile, dataloc
 
 lua_lib_location = find_library(_executor.LUA_LIB_NAME)
-lua_lib = ctypes.CDLL(lua_lib_location)
+lua_lib = ctypes.PyDLL(lua_lib_location)
+lua_lib_nogil = ctypes.CDLL(lua_lib_location)
 
 if not lua_lib_location or not lua_lib.lua_newstate:
     raise ImportError("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
 
 # we talk to executor in two ways: as a Python module and as a ctypes module
 executor_lib_location = dataloc('_executor.so')
-executor_lib = ctypes.CDLL(executor_lib_location)
+executor_lib = ctypes.PyDLL(executor_lib_location)
+executor_lib_nogil = ctypes.CDLL(executor_lib_location)
 
 if not executor_lib or not executor_lib.l_alloc_restricted:
     raise ImportError("unable to locate executor")
@@ -42,11 +44,9 @@ luaL_unref = lua_lib.luaL_unref
 luaL_unref.restype = ctypes.c_int
 lua_checkstack = lua_lib.lua_checkstack
 lua_checkstack.restype = ctypes.c_int
-lua_close = lua_lib.lua_close
-lua_close.restype = None
 lua_createtable = lua_lib.lua_createtable
 lua_createtable.restype = None
-lua_gc = lua_lib.lua_gc
+lua_gc = lua_lib_nogil.lua_gc
 lua_gc.restype = ctypes.c_int
 lua_getallocf = lua_lib.lua_getallocf
 lua_getallocf.restype = ctypes.c_void_p
@@ -105,7 +105,7 @@ EXECUTOR_LUA_CAPSULE_KEY = ctypes.c_char_p.in_dll(executor_lib,
     "EXECUTOR_LUA_CAPSULE_KEY")
 install_control_block = executor_lib.install_control_block
 install_control_block.restype = ctypes.c_int
-wrapped_lua_close = executor_lib.wrapped_lua_close
+wrapped_lua_close = executor_lib_nogil.wrapped_lua_close
 wrapped_lua_close.restype = None
 start_runtime_limiter = executor_lib.start_runtime_limiter
 start_runtime_limiter.restype = None
@@ -146,7 +146,7 @@ def lua_isnil(L, idx):
 
 
 if _executor.LUA_VERSION_NUM == 501:
-    lua_pcallk = executor_lib.memory_safe_pcallk
+    lua_pcallk = executor_lib_nogil.memory_safe_pcallk
 
     lua_tonumber = lua_lib.lua_tonumber
     lua_tonumber.restype = lua_number_type
@@ -164,7 +164,7 @@ if _executor.LUA_VERSION_NUM == 501:
     luaJIT_setmode = lua_lib.luaJIT_setmode
 
 elif _executor.LUA_VERSION_NUM in (502, 503):
-    lua_pcallk = lua_lib.lua_pcallk
+    lua_pcallk = lua_lib_nogil.lua_pcallk
     lua_tonumberx = lua_lib.lua_tonumberx
     lua_tonumberx.restype = lua_number_type
     lua_getglobal = lua_lib.lua_getglobal

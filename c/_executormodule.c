@@ -430,14 +430,8 @@ error:
 
 
 PyObject* decapsule(lua_capsule* capsule) {
-    PyGILState_STATE gstate;
-    gstate = PyGILState_Ensure();
-
     PyObject* ret = capsule->val;
     Py_INCREF(ret); // the caller gets a new reference
-
-    PyGILState_Release(gstate);
-
     return ret;
 }
 

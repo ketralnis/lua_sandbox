@@ -382,7 +382,7 @@ class Lua(object):
 
 
 class LuaValue(object):
-    __slots__ = ['executor', 'key', 'comment', 'cleanup_cache', 'cycle_id']
+    __slots__ = ['executor', 'key', 'comment', 'cleanup_cache']
 
     def __init__(self, executor, comment=None, cycle_id=None):
         """
@@ -396,7 +396,6 @@ class LuaValue(object):
         # the one that keeps the lua_State* live
         self.executor = executor
         self.comment = comment
-        self.cycle_id = None # overriden in _create
         self._create(cycle_id)
 
     @check_stack(2, -1)
@@ -416,9 +415,9 @@ class LuaValue(object):
         )
 
         if cycle_id is not None:
+            id_, val = cycle_id
             # added here, removed in _executormodule.c:free_python_capsule
-            self.executor.cycles.setdefault(id(cycle_id), []).append(cycle_id)
-            self.cycle_id = id(cycle_id)
+            self.executor.cycles.setdefault(id_, []).append(val)
 
     def __del__(self):
         self.cleanup_cache['luaL_unref'](self.L,
@@ -764,7 +763,6 @@ class LuaValue(object):
 
         elif callable(val) or isinstance(val, Capsule):
             val = val.inner if isinstance(val, Capsule) else val
-
             val_id = id(val)
 
             # fiddling with pointers is easier in C (leaves the userdata on
@@ -780,7 +778,7 @@ class LuaValue(object):
             # consume the userdata with the metatable set
             return LuaValue(executor,
                             comment=repr(val),
-                            cycle_id=val)
+                            cycle_id=(val_id, val))
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 

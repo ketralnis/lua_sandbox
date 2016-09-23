@@ -184,6 +184,11 @@ class TestLuaExecution(unittest.TestCase):
         ret = self.ex.execute(program, {'data': Capsule(data)})
         self.assertEqual(ret, (5.0, 10.0, 'str2', None))
 
+    def test_capsule_none(self):
+        program = "return data"
+        ret = self.ex.execute(program, {'data': Capsule(None)})
+        self.assertEqual(ret, (None,))
+
     def test_function_noargs(self):
         program = """
             return foo()

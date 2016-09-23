@@ -393,9 +393,16 @@ int free_python_capsule(lua_State *L) {
     }
 
     list = PyDict_GetItem(cycles, key);
-    if(list == NULL || !PyList_Check(list) || PyList_GET_SIZE(list)==0) {
-        PyErr_WarnEx(NULL, "free_python_capsule dangling reference", 0);
-        PyErr_Print(); // we can't really raise exceptions here
+
+    // we can't really raise exceptions here
+    if(list == NULL) {
+        PyErr_WarnEx(NULL, "free_python_capsule dangling reference (not found)", 0);
+        goto error;
+    } else if(!PyList_Check(list)) {
+        PyErr_WarnEx(NULL, "free_python_capsule dangling reference (not a list)", 0);
+        goto error;
+    } else if(PyList_GET_SIZE(list)==0) {
+        PyErr_WarnEx(NULL, "free_python_capsule dangling reference (empty list)", 0);
         goto error;
     }
 

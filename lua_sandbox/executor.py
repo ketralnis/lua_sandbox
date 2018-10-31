@@ -382,7 +382,7 @@ class Lua(object):
 
 
 class LuaValue(object):
-    __slots__ = ['executor', 'key', 'cleanup_cache']
+    __slots__ = ['executor', 'L', 'key', 'cleanup_cache']
 
     def __init__(self, executor, cycle_id=None):
         """
@@ -395,6 +395,7 @@ class LuaValue(object):
         # it's important that we keep a reference to the executor because he's
         # the one that keeps the lua_State* live
         self.executor = executor
+        self.L = executor.L
         self._create(cycle_id)
 
     @check_stack(2, -1)
@@ -422,10 +423,6 @@ class LuaValue(object):
         self.cleanup_cache['luaL_unref'](self.L,
             self.cleanup_cache['LUA_REGISTRYINDEX'],
             self.key)
-
-    @property
-    def L(self):
-        return self.executor.L
 
     @check_stack()
     def type_name(self):

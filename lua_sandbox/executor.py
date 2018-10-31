@@ -382,9 +382,9 @@ class Lua(object):
 
 
 class LuaValue(object):
-    __slots__ = ['executor', 'key', 'comment', 'cleanup_cache']
+    __slots__ = ['executor', 'key', 'cleanup_cache']
 
-    def __init__(self, executor, comment=None, cycle_id=None):
+    def __init__(self, executor, cycle_id=None):
         """
         Build a LuaValue off of whatever's on the top of the stack, then pop it
         off. We store it in Lua's global
@@ -395,7 +395,6 @@ class LuaValue(object):
         # it's important that we keep a reference to the executor because he's
         # the one that keeps the lua_State* live
         self.executor = executor
-        self.comment = comment
         self._create(cycle_id)
 
     @check_stack(2, -1)
@@ -648,12 +647,10 @@ class LuaValue(object):
             return kind == _executor.LUA_TNIL
 
     def __repr__(self):
-        comment = ' ' + self.comment if self.comment else ''
-        return "<%s (%s) %s:%d%s>" % (self.__class__.__name__,
-                                      self.type_name(),
-                                      self.executor.name,
-                                      self.key,
-                                      comment)
+        return "<%s (%s) %s:%d>" % (self.__class__.__name__,
+                                    self.type_name(),
+                                    self.executor.name,
+                                    self.key)
 
     @classmethod
     def from_python(cls, executor, val, recursion=0, max_recursion=10):
@@ -777,7 +774,6 @@ class LuaValue(object):
 
             # consume the userdata with the metatable set
             return LuaValue(executor,
-                            comment=repr(val),
                             cycle_id=(val_id, val))
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
@@ -804,7 +800,7 @@ def _callable_wrapper(executor, val):
 
 
 def _indexable_wrapper(executor, indexable, index_idx):
-    index_lua = LuaValue(executor, abs_index(executor.L, index_idx))
+    index_lua = LuaValue(executor)
     index_python = index_lua.to_python()
 
     try:

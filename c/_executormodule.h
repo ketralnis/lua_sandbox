@@ -61,6 +61,9 @@ void store_python_capsule(lua_State*,PyObject*,long);
 int free_python_capsule(lua_State *L);
 PyObject* decapsule(lua_capsule* capsule);
 int lazy_capsule_index(lua_State*);
+static int check_capsule_cache(lua_State* L, lua_capsule* capsule, int key_idx);
+static void set_capsule_cache(lua_State* L, lua_capsule* capsule, int key_idx, int value_idx);
+static void create_capsule_cache(lua_State* L, lua_capsule* capsule);
 static int translate_python_exception(lua_State*, PyGILState_STATE);
 
 #if LUA_VERSION_NUM == 501

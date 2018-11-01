@@ -155,6 +155,22 @@ class TestLuaExecution(unittest.TestCase):
         ret = self.ex.execute(program, {'capsule': capsule})
         self.assertIs(obj, ret[0])
 
+    def test_capsule_caches(self):
+        program = """
+            return capsule.property
+        """
+
+        d = {'property': 'foo'}
+        capsule = Capsule(d)
+
+        ret = self.ex.execute(program, {'capsule': capsule})
+        self.assertEquals(ret[0], 'foo')
+
+        d['property'] = 'bar'
+        ret = self.ex.execute(program, {'capsule': capsule})
+        self.assertEquals(ret[0], 'bar')
+
+
     def test_capsule_return_pass_arg(self):
         success = []
 

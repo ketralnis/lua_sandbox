@@ -305,6 +305,7 @@ class Lua(object):
         lua_pushcclosure(self.L, lazy_capsule_index, 2)
         lua_setfield(self.L, -2, '__index')
 
+        # so we can identify it
         lua_pushstring(self.L, "capsule")
         lua_setfield(self.L, -2, "capsule")
 
@@ -765,7 +766,7 @@ class LuaValue(object):
                                  ctypes.py_object(val),
                                  ctypes.c_long(val_id))
 
-            # assign the metatable of the userdata
+            # assign the metatable of the userdata to get the methods
             lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)
             lua_setmetatable(self.L, -2)
 

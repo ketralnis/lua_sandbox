@@ -2,8 +2,12 @@
 
 set -e
 
-function vrun() {
-    vagrant ssh -c "cd lua_sandbox && sudo python ./setup.py develop && $1"
+vrun() {
+    if [ `whoami` = "vagrant" ]; then
+        cd $HOME/lua_sandbox && sudo python ./setup.py develop && $1
+    else
+        vagrant ssh -c "cd lua_sandbox && sudo python ./setup.py develop && $1"
+    fi
 }
 
 if [ "$1" = "-d" ]; then

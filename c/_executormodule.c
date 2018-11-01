@@ -212,7 +212,7 @@ void disable_limit_memory(lua_State *L) {
 
 #if LUA_VERSION_NUM == 501
 
-static int memory_panicer (lua_State *L) {
+static int memory_panicer(lua_State *L) {
     // if we're out of memory, this might not even work
     lua_control_block *control = NULL;
     (void*)lua_getallocf(L, (void*)&control);
@@ -361,11 +361,16 @@ void store_python_capsule(lua_State *L,
     lua_capsule* capsule =
         (lua_capsule*)lua_newuserdata(L, sizeof(lua_capsule));
 
+    // store the index cache
+    lua_newtable(L); // the cache itself
+    int cache_ref = luaL_ref(L, LUA_REGISTRYINDEX); // pops it off the stack
+
     // we don't hold the GIL so we can't do anything but store pointers. note
     // that we explicitly are not refcounting here: we rely on `cycles` to keep
     // us live
     capsule->val = val;
     capsule->cycle_key = cycle_key;
+    capsule->cache_ref = cache_ref;
 }
 
 
@@ -377,6 +382,9 @@ int free_python_capsule(lua_State *L) {
 
     PyObject* cycles = lua_touserdata(L, lua_upvalueindex(1));
     luaL_argcheck(L, cycles != NULL, -1, "upvalue missing?");
+
+    // clean up the cache
+    luaL_unref(L, LUA_REGISTRYINDEX, capsule->cache_ref);
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -457,8 +465,29 @@ int lazy_capsule_index(lua_State *L) {
     // upvalue[1] points to the Python proxy function for extracting the key,
     // args[-2] points to the capsule struct, and args[-1] is the index to the
     // key they are trying to look up
+    int key_idx = lua_gettop(L);
 
     disable_limit_memory(L);
+
+    /// see if it's already in the cache
+    // put the cache on the stack
+    lua_rawgeti(L, LUA_REGISTRYINDEX, capsule->cache_ref);
+    // put the key on the stack
+    lua_pushvalue(L, key_idx);
+    // look at cache[key]
+    lua_rawget(L, -2);
+    // see if it's in there
+    if(!lua_isnil(L, -1)) {
+        // it was there! we can just leave it on the stack and return it
+        // stack is [cache_table, cache_result];
+        lua_insert(L, -2); // swaps the table and the result
+        lua_pop(L, 1); // pops the table, leaving the result
+        // success!
+        goto finish_no_gil;
+
+    } else {
+        lua_pop(L, 2); // pop the nil and the cache table
+    }
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -478,6 +507,24 @@ int lazy_capsule_index(lua_State *L) {
     Py_DECREF(ret);
 
     PyGILState_Release(gstate);
+
+    if(!lua_isnil(L, -1)) {
+        /// now we have the proper result at the top of the stack, we can put it in
+        /// the cache for next time
+        int value_idx = lua_gettop(L);
+        // put the cache on the stack
+        lua_rawgeti(L, LUA_REGISTRYINDEX, capsule->cache_ref);
+        // put the key on the stack
+        lua_pushvalue(L, key_idx);
+        // put the value on the stack
+        lua_pushvalue(L, value_idx);
+        // stack now is [value, table, key, value] so -3 is the table
+        lua_rawset(L, -3);
+        // that pops the key and the value so stack is [value, table]
+        lua_pop(L, 1); // leave only the value returned from Python
+    }
+
+finish_no_gil:
     enable_limit_memory(L);
 
     return 1;

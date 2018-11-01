@@ -34,6 +34,7 @@ typedef struct {
 typedef struct {
     PyObject* val;
     long cycle_key;
+    int cache_ref;
 } lua_capsule;
 
 typedef struct {

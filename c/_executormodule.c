@@ -16,6 +16,9 @@
 #define EXECUTOR_XSTR(s) EXECUTOR_STR(s)
 #define EXECUTOR_STR(s) #s
 
+#define abs_index(L, i) \
+    ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : \
+    lua_gettop(L) + (i) + 1)
 
 int install_control_block(lua_State *L, size_t max_memory) {
     lua_control_block* control = malloc(sizeof(lua_control_block));
@@ -361,16 +364,12 @@ void store_python_capsule(lua_State *L,
     lua_capsule* capsule =
         (lua_capsule*)lua_newuserdata(L, sizeof(lua_capsule));
 
-    // store the index cache
-    lua_newtable(L); // the cache itself
-    int cache_ref = luaL_ref(L, LUA_REGISTRYINDEX); // pops it off the stack
-
     // we don't hold the GIL so we can't do anything but store pointers. note
     // that we explicitly are not refcounting here: we rely on `cycles` to keep
     // us live
     capsule->val = val;
     capsule->cycle_key = cycle_key;
-    capsule->cache_ref = cache_ref;
+    capsule->cache_ref = LUA_REFNIL; // cache is populated lazily
 }
 
 
@@ -384,7 +383,9 @@ int free_python_capsule(lua_State *L) {
     luaL_argcheck(L, cycles != NULL, -1, "upvalue missing?");
 
     // clean up the cache
-    luaL_unref(L, LUA_REGISTRYINDEX, capsule->cache_ref);
+    if(capsule->cache_ref != LUA_REFNIL) {
+        luaL_unref(L, LUA_REGISTRYINDEX, capsule->cache_ref);
+    }
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
@@ -467,67 +468,130 @@ int lazy_capsule_index(lua_State *L) {
     // key they are trying to look up
     int key_idx = lua_gettop(L);
 
+    // stack is [key]
+
     disable_limit_memory(L);
+    // with the memory limiter disabled, we must now exit through finish_no_gil
 
-    /// see if it's already in the cache
-    // put the cache on the stack
-    lua_rawgeti(L, LUA_REGISTRYINDEX, capsule->cache_ref);
-    // put the key on the stack
-    lua_pushvalue(L, key_idx);
-    // look at cache[key]
-    lua_rawget(L, -2);
-    // see if it's in there
-    if(!lua_isnil(L, -1)) {
-        // it was there! we can just leave it on the stack and return it
-        // stack is [cache_table, cache_result];
-        lua_insert(L, -2); // swaps the table and the result
-        lua_pop(L, 1); // pops the table, leaving the result
-        // success!
+    if(check_capsule_cache(L, capsule, key_idx)) {
+        // we've already computed this before, and check_capsule_cache put it
+        // on the stack and ready to return
+        // stack is now [key, value]
         goto finish_no_gil;
-
-    } else {
-        lua_pop(L, 2); // pop the nil and the cache table
     }
 
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
+    // stack is [key]
+
+    lua_pushvalue(L, key_idx); // he'll consume this and leave the return value for us
     PyObject* ret = PyObject_CallFunction(index_proxy, "OOi",
                                           executor,
                                           capsule->val,
                                           -1);
-
     // he either raises an exception or leaves the result at the top of the Lua
     // stack
     if(ret == NULL) {
         // fixes the memory limiter and the GIL too
         return translate_python_exception(L, gstate);
     }
-
     Py_DECREF(ret);
-
     PyGILState_Release(gstate);
 
-    if(!lua_isnil(L, -1)) {
-        /// now we have the proper result at the top of the stack, we can put it in
-        /// the cache for next time
-        int value_idx = lua_gettop(L);
-        // put the cache on the stack
-        lua_rawgeti(L, LUA_REGISTRYINDEX, capsule->cache_ref);
-        // put the key on the stack
-        lua_pushvalue(L, key_idx);
-        // put the value on the stack
-        lua_pushvalue(L, value_idx);
-        // stack now is [value, table, key, value] so -3 is the table
-        lua_rawset(L, -3);
-        // that pops the key and the value so stack is [value, table]
-        lua_pop(L, 1); // leave only the value returned from Python
-    }
+    // stack is [key, value]
+
+    /// now we have the result at the top of the stack, we can put it in / the
+    //cache for next time
+    // stack is [value]
+    int value_idx = lua_gettop(L);
+    set_capsule_cache(L, capsule, key_idx, value_idx);
 
 finish_no_gil:
     enable_limit_memory(L);
 
+    // stack is [key, value]. swap and pop the key, leaving only the value
+    lua_insert(L, -2);
+    lua_pop(L, 1);
+
+    // stack is [value]
+
     return 1;
+}
+
+
+static int check_capsule_cache(lua_State* L, lua_capsule* capsule, int key_idx) {
+    /*
+     * Check the ref cache for this capsule to see if the given key has already
+     * been cached. If so, put it at the top of the stack and return true,
+     * otherwise don't mess with the stack and return false
+     */
+
+    key_idx = abs_index(L, key_idx);
+
+    create_capsule_cache(L, capsule);
+    // stack is [cache]
+    lua_pushvalue(L, key_idx);
+    // stack is [cache, key]
+    lua_rawget(L, -2); // pops the key
+    // stack is [cache, result]
+    if(lua_isnil(L, -1)) {
+        // it wasn't there, revert the stack to before we started
+        lua_pop(L, 2); // pops the nil and the cache
+        return 0;
+    }
+
+
+    // stack is [cache, container] because the result is a 1-item array container
+    lua_rawgeti(L, -1, 1);
+    // stack is [cache, container, actual_result]. shift stuff around so we can return it
+    lua_insert(L, -3);
+    // stack is [actual_result, cache, container
+    lua_pop(L, 2);
+    // stack is [actual_result]. success!
+    return 1;
+}
+
+
+static void set_capsule_cache(lua_State* L, lua_capsule* capsule,
+                              int key_idx, int value_idx) {
+    key_idx = abs_index(L, key_idx);
+    value_idx = abs_index(L, value_idx);
+
+    create_capsule_cache(L, capsule);
+    // stack is [cache]
+    lua_pushvalue(L, key_idx);
+    // stack is [cache, key]
+    lua_createtable(L, 1, 0); // the 1-item container with room for us
+    // stack is [cache, key, container]
+    lua_pushvalue(L, value_idx);
+    // stack is [cache, key, container, value]
+    lua_rawseti(L, -2, 1); // adds the value to the container, pops the value
+    // stack is [cache, key, container]
+    // now we're all set to insert the container into the cache
+    lua_rawset(L, -3); // pops the key and container
+    // stack is [cache];
+    lua_pop(L, 1);// clean up after ourselves
+}
+
+
+static void create_capsule_cache(lua_State* L, lua_capsule* capsule) {
+    /*
+     * Bring the ref cache for this capsule to the top of the stack, creating
+     * it if necessary
+     */
+    if(capsule->cache_ref == LUA_REFNIL) {
+        // this capsule hasn't had a cache created yet, so create it
+        lua_createtable(L, 0, 1); // the cache itself with room for our new value
+        // stack is [cache]
+        lua_pushvalue(L, -1); // so we have two copies of the table for when luaL_ref pops it off the stack
+        // stack is [cache, cache]
+        capsule->cache_ref = luaL_ref(L, LUA_REGISTRYINDEX); // pops it off the stack, leaving our duplicate
+        // stack is [cache] and the cache is now in the registry
+    } else {
+        // push it on the stack
+        lua_rawgeti(L, LUA_REGISTRYINDEX, capsule->cache_ref);
+    }
 }
 
 

@@ -213,6 +213,18 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(({1.0: 8.0, 2.0: 9.0},), ret)
         self.assertEqual([2.0, 3.0], closed)
 
+    def test_function_args(self):
+        program = """
+        local function multiplier(a, b)
+            return a*b
+        end
+        return multiplier
+        """
+        loaded = self.ex.lua.load(program)
+        func = loaded()[0]
+        multiplied = func(3, 7)
+        self.assertEqual([21.0], [x.to_python() for x in multiplied])
+
     def test_method_passing(self):
         class MyObject(object):
             def double(self, x):

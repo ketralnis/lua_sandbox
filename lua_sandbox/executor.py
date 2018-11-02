@@ -757,14 +757,24 @@ class LuaValue(object):
             return LuaValue(executor)
 
         elif callable(val) or isinstance(val, Capsule):
-            val = val.inner if isinstance(val, Capsule) else val
-            val_id = id(val)
+            lval = val.inner if isinstance(val, Capsule) else val
+            val_id = id(lval)
+
+            should_cache = recursive = 0
+
+            if isinstance(val, Capsule):
+                if val.cache:
+                    should_cache = 1
+                if val.recursive:
+                    recursive = 1
 
             # fiddling with pointers is easier in C (leaves the userdata on
             # the stack)
             store_python_capsule(self.L,
-                                 ctypes.py_object(val),
-                                 ctypes.c_long(val_id))
+                                 ctypes.py_object(lval),
+                                 ctypes.c_long(val_id),
+                                 should_cache,
+                                 recursive)
 
             # assign the metatable of the userdata to get the methods
             lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)
@@ -772,7 +782,7 @@ class LuaValue(object):
 
             # consume the userdata with the metatable set
             return LuaValue(executor,
-                            cycle_id=(val_id, val))
+                            cycle_id=(val_id, lval))
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 
@@ -797,7 +807,7 @@ def _callable_wrapper(executor, val):
     as_lua._bring_to_top(False)
 
 
-def _indexable_wrapper(executor, indexable, index_idx):
+def _indexable_wrapper(executor, indexable, should_cache, recursive):
     index_lua = LuaValue(executor)
     index_python = index_lua.to_python()
 
@@ -808,8 +818,12 @@ def _indexable_wrapper(executor, indexable, index_idx):
         return lua_pushnil(executor.L)
 
     # if it's a dict, continue the laziness
-    if isinstance(found_python, dict):
-        lv = LuaValue.from_python(executor, Capsule(found_python))
+    if recursive and isinstance(found_python, dict):
+        capsule = Capsule(found_python,
+                          cache=should_cache,
+                          recursive=True)
+        lv = LuaValue.from_python(executor,
+                                  capsule)
         return lv._bring_to_top(False)
 
     # otherwise try to serialise the value the normal way
@@ -822,10 +836,12 @@ class Capsule(object):
     A container for passing Python objects through Lua unmolested
     """
 
-    __slots__ = ['inner']
+    __slots__ = ['inner', 'cache', 'recursive']
 
-    def __init__(self, inner):
+    def __init__(self, inner, cache=True, recursive=True):
         self.inner = inner
+        self.cache = cache
+        self.recursive = recursive
 
 
 class LuaException(Exception):

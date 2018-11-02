@@ -534,6 +534,11 @@ static int check_capsule_cache(lua_State* L, lua_capsule* capsule, int key_idx) 
      * otherwise don't mess with the stack and return false
      */
 
+    if(capsule->cache_ref == LUA_REFNIL) {
+        // if this capsule doesn't have a cache, nothing can be in it
+        return 0;
+    }
+
     key_idx = abs_index(L, key_idx);
 
     create_capsule_cache(L, capsule);

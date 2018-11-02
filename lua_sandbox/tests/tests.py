@@ -157,19 +157,37 @@ class TestLuaExecution(unittest.TestCase):
 
     def test_capsule_caches(self):
         program = """
-            return capsule.property
+            first_time = capsule.property
+            update_value()
+            second_time = capsule.property
+            return first_time, second_time
         """
 
         d = {'property': 'foo'}
-        capsule = Capsule(d)
+        capsule = Capsule(d, cache=True)
+        def update_value():
+            d['property'] = 'bar'
 
-        ret = self.ex.execute(program, {'capsule': capsule})
-        self.assertEquals(ret[0], 'foo')
+        ret = self.ex.execute(program, {'capsule': capsule,
+                                        'update_value': update_value})
+        self.assertEquals(ret, ('foo', 'foo'))
 
-        d['property'] = 'bar'
-        ret = self.ex.execute(program, {'capsule': capsule})
-        self.assertEquals(ret[0], 'bar')
+    def test_capsule_no_caches(self):
+        program = """
+            first_time = capsule.property
+            update_value()
+            second_time = capsule.property
+            return first_time, second_time
+        """
 
+        d = {'property': 'foo'}
+        capsule = Capsule(d, cache=False)
+        def update_value():
+            d['property'] = 'bar'
+
+        ret = self.ex.execute(program, {'capsule': capsule,
+                                        'update_value': update_value})
+        self.assertEquals(ret, ('foo', 'bar'))
 
     def test_capsule_return_pass_arg(self):
         success = []

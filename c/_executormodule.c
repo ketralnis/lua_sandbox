@@ -358,7 +358,9 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
 
 void store_python_capsule(lua_State *L,
                           PyObject* val,
-                          long cycle_key) {
+                          long cycle_key,
+                          int should_cache,
+                          int recursive) {
     // our caller already added us to cycles so we don't have to worry about
     // it here
     lua_capsule* capsule =
@@ -370,6 +372,8 @@ void store_python_capsule(lua_State *L,
     capsule->val = val;
     capsule->cycle_key = cycle_key;
     capsule->cache_ref = LUA_REFNIL; // cache is populated lazily
+    capsule->cache = should_cache;
+    capsule->recursive = recursive;
 }
 
 
@@ -473,7 +477,8 @@ int lazy_capsule_index(lua_State *L) {
     disable_limit_memory(L);
     // with the memory limiter disabled, we must now exit through finish_no_gil
 
-    if(check_capsule_cache(L, capsule, key_idx)) {
+    if(capsule->cache
+       && check_capsule_cache(L, capsule, key_idx)) {
         // we've already computed this before, and check_capsule_cache put it
         // on the stack and ready to return
         // stack is now [key, value]
@@ -486,10 +491,11 @@ int lazy_capsule_index(lua_State *L) {
     // stack is [key]
 
     lua_pushvalue(L, key_idx); // he'll consume this and leave the return value for us
-    PyObject* ret = PyObject_CallFunction(index_proxy, "OOi",
+    PyObject* ret = PyObject_CallFunction(index_proxy, "OOii",
                                           executor,
                                           capsule->val,
-                                          -1);
+                                          capsule->cache,
+                                          capsule->recursive);
     // he either raises an exception or leaves the result at the top of the Lua
     // stack
     if(ret == NULL) {
@@ -503,9 +509,10 @@ int lazy_capsule_index(lua_State *L) {
 
     /// now we have the result at the top of the stack, we can put it in / the
     //cache for next time
-    // stack is [value]
-    int value_idx = lua_gettop(L);
-    set_capsule_cache(L, capsule, key_idx, value_idx);
+    if(capsule->cache) {
+        int value_idx = lua_gettop(L);
+        set_capsule_cache(L, capsule, key_idx, value_idx);
+    }
 
 finish_no_gil:
     enable_limit_memory(L);

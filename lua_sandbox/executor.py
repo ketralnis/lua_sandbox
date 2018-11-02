@@ -550,7 +550,7 @@ class LuaValue(object):
         before_top = lua_gettop(self.L)
 
         try:
-            lua_args = map(lambda x: LuaValue.from_python(self, x), args)
+            lua_args = map(lambda x: LuaValue.from_python(self.executor, x), args)
         except Exception:
             # get ourselves off of the stack
             lua_pop(self.L, 1)

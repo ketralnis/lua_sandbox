@@ -125,7 +125,7 @@ free_python_capsule = executor_lib.free_python_capsule
 free_python_capsule.restype = ctypes.c_int
 decapsule = executor_lib.decapsule
 decapsule.restype = ctypes.py_object
-lazy_capsule_index = executor_lib.lazy_capsule_index
+lazy_capsule_index = executor_lib_nogil.lazy_capsule_index
 lazy_capsule_index.restype = ctypes.c_int
 
 # function types

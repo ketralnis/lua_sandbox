@@ -288,9 +288,10 @@ int call_python_function_from_lua(lua_State *L) {
     PyGILState_STATE gstate;
     gstate = PyGILState_Ensure();
 
-    PyObject* ret = PyObject_CallFunction(call_proxy, "OO",
+    PyObject* ret = PyObject_CallFunction(call_proxy, "OOi",
                                           executor,
-                                          capsule->val);
+                                          capsule->val,
+                                          capsule->raw_lua_args);
 
     if(ret == NULL) {
         // fixes the memory limiter and the GIL too
@@ -360,7 +361,8 @@ void store_python_capsule(lua_State *L,
                           PyObject* val,
                           long cycle_key,
                           int should_cache,
-                          int recursive) {
+                          int recursive,
+                          int raw_lua_args) {
     // our caller already added us to cycles so we don't have to worry about
     // it here
     lua_capsule* capsule =
@@ -374,6 +376,7 @@ void store_python_capsule(lua_State *L,
     capsule->cache_ref = LUA_REFNIL; // cache is populated lazily
     capsule->cache = should_cache;
     capsule->recursive = recursive;
+    capsule->raw_lua_args = raw_lua_args;
 }
 
 

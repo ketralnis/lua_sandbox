@@ -2,6 +2,7 @@
 
 import multiprocessing
 import os
+import re
 import threading
 import time
 import unittest
@@ -326,6 +327,47 @@ class TestLuaExecution(unittest.TestCase):
 
         with self.assertRaises(TypeError):
             t['foo']['bar'] = 5
+
+    def test_buffer_interface(self):
+        # we can get a buffer into a Lua string and, and re.search works on
+        # that buffer
+        loaded = self.ex.lua.load(""" return "this is my string" """)
+        lua_string, = loaded()
+        with lua_string.as_buffer() as buff:
+            self.assertEqual(re.search('my (string)', buff).groups(),
+                             ('string',))
+
+        # this is the regular callback way with lots of copies, here mostly for
+        # demonstration
+        def slow_search(pat, x):
+            result = re.search(pat, x)
+            if result:
+                return result.groups()
+        ret = self.ex.execute(""" return re.search("(string)", str)[1] """,
+                              {
+                                  're': {'search': slow_search},
+                                   'str': 'this is my string'
+                              })
+        self.assertEqual(ret, ('string',))
+
+        # and this is a faster callback which can avoid the copy on the `x`
+        # argument
+        def fast_search(pat, x):
+            pat = pat.to_python()
+            with x.as_buffer() as buff:
+                result = re.search(pat, buff)
+            if result:
+                # this does still copy if there is a match
+                return result.groups()
+        ret = self.ex.execute(""" return re.search("(string)", str)[1] """,
+                              {
+                                  're': {
+                                    'search': Capsule(fast_search,
+                                                      raw_lua_args=True),
+                                   },
+                                   'str': 'this is my string'
+                              })
+        self.assertEqual(ret, ('string',))
 
 
 class TestSafeguards(TestLuaExecution):

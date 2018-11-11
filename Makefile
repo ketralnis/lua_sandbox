@@ -7,12 +7,12 @@ INSTALLEDENV=.env/installed
 installenv: ${INSTALLEDENV}
 
 check_dependencies:
-	which virtualenv-2.7
+	which virtualenv
 
 ${INSTALLEDENV}: setup.py
 	make check_dependencies
 	rm -fr .env
-	virtualenv-2.7 .env
+	virtualenv .env
 	make rebuild
 
 sdist: ${INSTALLEDENV}

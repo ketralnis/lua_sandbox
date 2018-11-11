@@ -15,7 +15,7 @@ else
 fi
 
 # the basics required to get lua_sandbox compiling
-apt-get -y install python python-pip python-dev $USE_LUA_LIB
+apt-get -y install python python-pip python-dev python-virtualenv $USE_LUA_LIB
 
 # development conveniences
 apt-get -y install gdb python-all-dbg

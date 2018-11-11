@@ -92,8 +92,12 @@ lua_settop.restype = None
 lua_setupvalue = lua_lib.lua_setupvalue
 lua_setupvalue.restype = ctypes.c_void_p # this isn't true but we never use it
 lua_toboolean = lua_lib.lua_toboolean
+# lua_tolstring returns a char*, but if we tell ctypes that then it will want
+# to magically convert those to str for us. Unfortunately when it does that it
+# doesn't account for NULL bytes which we do want to handle. so we'll pretend
+# it returns a void* and handle the string conversion ourselves
 lua_tolstring = lua_lib.lua_tolstring
-lua_tolstring.restype = ctypes.c_char_p
+lua_tolstring.restype = ctypes.c_void_p
 lua_touserdata = lua_lib.lua_touserdata
 lua_touserdata.restype = ctypes.c_void_p
 lua_type = lua_lib.lua_type
@@ -760,13 +764,15 @@ class LuaValue(object):
             lval = val.inner if isinstance(val, Capsule) else val
             val_id = id(lval)
 
-            should_cache = recursive = 0
+            should_cache = recursive = raw_lua_args = 0
 
             if isinstance(val, Capsule):
                 if val.cache:
                     should_cache = 1
                 if val.recursive:
                     recursive = 1
+                if val.raw_lua_args:
+                    raw_lua_args = 1
 
             # fiddling with pointers is easier in C (leaves the userdata on
             # the stack)
@@ -774,7 +780,8 @@ class LuaValue(object):
                                  ctypes.py_object(lval),
                                  ctypes.c_long(val_id),
                                  should_cache,
-                                 recursive)
+                                 recursive,
+                                 raw_lua_args)
 
             # assign the metatable of the userdata to get the methods
             lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)
@@ -786,15 +793,43 @@ class LuaValue(object):
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 
+    @contextlib.contextmanager
+    def as_buffer(self):
+        """
+        Yields a buffer() directly into the memory that contains this Lua string.
 
-def _callable_wrapper(executor, val):
+        This is useful for zero-allocation access to lua strings, but comes at
+        the cost of needing to be very careful with how you affect the Lua VM
+        while you hold onto this reference. The referred string must remain on
+        the Lua stack the whole time you retain a reference to it, you must
+        release that reference before as_buffer() returns, and you must never
+        write to the buffer
+        """
+        with self._bring_to_top():
+            kind = lua_type(self.L, -1)
+            if kind != _executor.LUA_TSTRING:
+                raise TypeError("as_buffer only works on strings!")
+
+            size = ctypes.c_size_t(0)
+            ptr = lua_tolstring(self.L, -1, ctypes.byref(size))
+            # size-1 because Lua includes room for a null byte but we don't
+            # need it
+            cls = (ctypes.c_char * size.value)
+            buff = cls.from_address(ptr)
+            yield buff
+
+
+def _callable_wrapper(executor, val, raw_lua_args=False):
     # we get called with a new stack so anything on it belongs to us
     nargs = lua_gettop(executor.L)
 
     args = []
 
     for _ in xrange(1, nargs):
-        args.append(LuaValue(executor).to_python())
+        if raw_lua_args:
+            args.append(LuaValue(executor))
+        else:
+            args.append(LuaValue(executor).to_python())
 
     args.reverse()
 
@@ -836,12 +871,13 @@ class Capsule(object):
     A container for passing Python objects through Lua unmolested
     """
 
-    __slots__ = ['inner', 'cache', 'recursive']
+    __slots__ = ['inner', 'cache', 'recursive', 'raw_lua_args']
 
-    def __init__(self, inner, cache=True, recursive=True):
+    def __init__(self, inner, cache=True, recursive=True, raw_lua_args=False):
         self.inner = inner
         self.cache = cache
         self.recursive = recursive
+        self.raw_lua_args = raw_lua_args
 
 
 class LuaException(Exception):

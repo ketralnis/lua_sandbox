@@ -224,6 +224,22 @@ class TestLuaExecution(unittest.TestCase):
         ret = self.ex.execute(program, {'data': Capsule(None)})
         self.assertEqual(ret, (None,))
 
+    def test_capsule_lazy(self):
+        loaded = self.ex.lua.sandboxed_load("""
+            return data.more_data
+        """)
+
+        self.ex.lua.sandbox['data'] = Capsule(dict(
+            data=1,
+            more_data="string",
+            # if the capsule isn't lazy, this will keep it from being
+            # passed in
+            something_non_serialiseable=object(),
+        ))
+
+        result = [x.to_python() for x in loaded()]
+        self.assertEqual(result, ["string",])
+
     def test_function_noargs(self):
         program = """
             return foo()

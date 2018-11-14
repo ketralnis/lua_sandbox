@@ -3,6 +3,7 @@ from functools import partial
 from functools import wraps
 import contextlib
 import ctypes
+import logging
 
 from lua_sandbox import _executor
 from lua_sandbox.utils import datafile, dataloc
@@ -73,6 +74,8 @@ lua_pushnumber = lua_lib.lua_pushnumber
 lua_pushnumber.restype = None
 lua_pushstring = lua_lib.lua_pushstring
 lua_pushstring.restype = ctypes.c_void_p # this isn't true but we never use it
+lua_pushvalue = lua_lib.lua_pushvalue
+lua_pushvalue.restype = None
 lua_rawget = lua_lib.lua_rawget
 lua_rawget.restype = None
 lua_rawgeti = lua_lib.lua_rawgeti
@@ -201,29 +204,37 @@ def check_stack(needs=0, expected=0):
             if needs and not lua_checkstack(self.L, needs):
                 raise LuaOutOfMemoryException("%r.checkstack" % (fn,))
 
-            oom = False
             before_top = lua_gettop(self.L)
 
             try:
-                return fn(self, *a, **kw)
+                ret = fn(self, *a, **kw)
+                after_top = lua_gettop(self.L)
+                if after_top-before_top != expected:
+                    # the no-exception case
+                    raise LuaInvariantException(
+                        ("check_stack in %r (needs=%d/expected=%d/before_top=%d,after_top=%d)")
+                         % (fn, needs, expected, before_top, after_top))
+                return ret
             except LuaOutOfMemoryException:
                 # if we ran out of ram the whole instance is probably blown so
                 # the stack probably can't be cleaned up
-                oom = True
                 raise
-            finally:
-                if not oom:
-                    # this will override any real exception being thrown, but it
-                    # indicates a bug in the library so fixing that is probably
-                    # more important than returning values from a VM that we're
-                    # now unsure about the state of
-                    after_top = lua_gettop(self.L)
-                    if after_top-before_top != expected:
-                        raise LuaInvariantException(
-                            ("check_stack in %r"
-                             "(needs=%d/expected=%d/before_top=%d,after_top=%d)")
-                            % (fn, needs, expected, before_top, after_top))
-
+            except Exception as ex:
+                # on any other exception we should leave the stack unchanged so
+                # double check that
+                after_top = lua_gettop(self.L)
+                if after_top != before_top:
+                    # this will override any real exception being thrown, but
+                    # it indicates a bug in the library so fixing that is
+                    # probably more important than returning values from a VM
+                    # that we're now unsure about the state of
+                    logging.exception("double failure in lua_sandbox")
+                    raise LuaInvariantException(
+                        ("check_stack in %r on %r (needs=%d/expected=%d/before_top=%d,after_top=%d)")
+                         % (fn, ex, needs, expected, before_top, after_top))
+                # otherwise it's just a regular exception so reraise whatever
+                # it was
+                raise
         return wrapped
     return wrap
 
@@ -326,19 +337,20 @@ class Lua(object):
 
     @check_stack(2, 0)
     def registry(self, key):
-        key = LuaValue.from_python(self, key)
-        key._bring_to_top(False)
+        sv = StackValue.from_python(self, key)
+        # stack is [sv]
         lua_rawget(self.L, _executor.LUA_REGISTRYINDEX)
-        return LuaValue(self)
+        # consumes sv leaving [registry]
+        return RegistryValue(self) # consumes [registry]
 
     @check_stack(1, 0)
     def set_global(self, key, value):
         if not isinstance(key, str):
             raise TypeError("key must be str, not %r" % (key,))
 
-        lvalue = LuaValue.from_python(self, value)
-        lvalue._bring_to_top(False)
-        lua_setglobal(self.L, key)
+        sv = StackValue.from_python(self, value)
+        # stack is [value]
+        lua_setglobal(self.L, key) # consumes value leaving []
 
     def __setitem__(self, key, value):
         return self.set_global(key, value)
@@ -352,7 +364,8 @@ class Lua(object):
             raise TypeError("key must be str, not %r" % (key,))
 
         lua_getglobal(self.L, key)
-        return LuaValue(self)
+        # stack is [value]
+        return RegistryValue(self) # consumes [value]
 
     def __getitem__(self, key):
         return self.get_global(key)
@@ -371,9 +384,11 @@ class Lua(object):
                                     ctypes.c_size_t(len(code)),
                                     desc or self.__class__.__name__,
                                     mode)
+        # leaves [code] on the stack if successful
 
         if load_ret == _executor.LUA_OK:
-            return LuaValue(self)
+            # stack is [code]
+            return RegistryValue(self)  # consumes code
         elif load_ret == _executor.LUA_ERRSYNTAX:
             raise LuaSyntaxError(self)
         elif load_ret == _executor.LUA_ERRMEM:
@@ -384,58 +399,61 @@ class Lua(object):
     @check_stack(1, 0)
     def create_table(self):
         lua_createtable(self.L, 0, 0)
-        return LuaValue(self)
+        return RegistryValue(self)
 
     def __del__(self):
         if self.L:
             self.cleanup_cache['wrapped_lua_close'](self.L)
 
 
-class LuaValue(object):
-    __slots__ = ['executor', 'L', 'key', 'cleanup_cache']
+class _LuaValue(object):
+    pass
 
-    def __init__(self, executor):
+
+class StackValue(_LuaValue):
+    """
+    Represents a Lua value on the Lua stack.
+
+    Because this is really just a wrapper around the integer representing the
+    index on the stack, it requires manual stack management! It doesn't push or
+    pop itself unless you ask it to. You probably shouldn't use this if it can
+    escape a single function or so, use RegistryValue for that.
+
+    Internally we should be using mostly StackValue, but references we leak to
+    the outside should be mostly RegistryValue
+    """
+    def __init__(self, executor, idx=None):
         """
-        Build a LuaValue off of whatever's on the top of the stack, then pop it
-        off. We store it in Lua's global
+        Build a StackValue off of whatever's on top of the stack and leave it
+        there, keeping track of the index
         """
-
-        assert isinstance(executor, Lua), "expected Lua, got %r" % (executor,)
-
-        # it's important that we keep a reference to the executor because he's
-        # the one that keeps the lua_State* live
         self.executor = executor
         self.L = executor.L
-        self._create()
+        self.idx = abs_index(self.L, idx) if idx is not None else lua_gettop(self.L)
 
-    @check_stack(2, -1)
-    def _create(self):
-        # right now the top of the stack contains the item that we're storing
+    def __repr__(self):
+        return "<%s (%s) %s:%d>" % (self.__class__.__name__,
+                                    self.lua_type_name(),
+                                    self.executor.name,
+                                    self.idx)
 
-        # pops it off and stores the integer reference in the registry
-        self.key = luaL_ref(self.L, _executor.LUA_REGISTRYINDEX)
-
-        # now we've consumed it from the stack
-
-        # this is a little weird, but we need to hold on to these so that our
-        # __del__ has access to them
-        self.cleanup_cache = dict(
-            luaL_unref=luaL_unref,
-            LUA_REGISTRYINDEX=_executor.LUA_REGISTRYINDEX,
-        )
-
-    def __del__(self):
-        self.cleanup_cache['luaL_unref'](self.L,
-            self.cleanup_cache['LUA_REGISTRYINDEX'],
-            self.key)
+    @check_stack(0, -1)
+    def pop(self):
+        if self.idx is None:
+            raise LuaInvariantException("can't pop myself twice")
+        if lua_gettop(self.L) != self.idx:
+            # this is a very basic check that doesn't catch even basic failures
+            raise LuaInvariantException("popping someone else!")
+        self.idx = None
+        lua_pop(self.L, 1)
 
     @check_stack()
-    def type(self):
-        with self._bring_to_top():
-            return lua_type(self.L, -1)
+    def lua_type(self):
+        return lua_type(self.L, self.idx)
 
-    def type_name(self):
-        name = lua_typename(self.L, self.type())
+    def lua_type_name(self):
+        # extract the value
+        name = lua_typename(self.L, self.lua_type())
         return name
 
     @contextlib.contextmanager
@@ -444,20 +462,45 @@ class LuaValue(object):
         if not lua_checkstack(self.L, 1):
             raise LuaOutOfMemoryException("_bring_to_top.checkstack")
 
-        # get the value to the top of the stack
-        lua_rawgeti(self.L, _executor.LUA_REGISTRYINDEX, self.key)
+        # it's already on the stack somewhere, this just duplicates it to the
+        # top position
+        lua_pushvalue(self.L, self.idx)
 
         if cleanup_after:
-            return self.__bring_to_top()
+            return self.__bring_to_top_cleanup()
 
-    def __bring_to_top(self):
+    @contextlib.contextmanager
+    def __bring_to_top_cleanup(self):
         try:
-            yield
+            new_sv = StackValue(self.executor, -1)
+            yield new_sv
         finally:
             lua_pop(self.L, 1)
 
+    @check_stack(1, 0)
+    def as_ref(self):
+        """
+        Return a RegistryValue for this stack entry, leaving it on the stack
+        """
+        self._bring_to_top(False)
+        return RegistryValue(self.executor)
+
+    @check_stack(1, -1)
+    def to_ref(self):
+        """
+        Return a RegistryValue for this stack entry, consuming it from the stack
+        """
+        self._bring_to_top(False)
+        ret = RegistryValue(self.executor)
+        self.pop() # consume ourselves
+        return ret
+
+    @check_stack(1, 0)
+    def to_python(self):
+        return self._to_python(self.idx)
+
     def _to_python(self, idx):
-        kind = lua_type(self.L, idx)
+        kind = lua_type(self.L, idx)  # this idx may not be referring to us
 
         if kind == _executor.LUA_TNIL:
             return None
@@ -482,11 +525,15 @@ class LuaValue(object):
 
             lua_pushnil(self.L) # first key
 
+            # stack is [nil]
+
             while True:
                 nidx = lua_next(self.L, idx)
 
                 if nidx == 0:
                     break
+
+                # stack is [key, value]
 
                 # `key' is at index -2 and `value' at index -1
                 try:
@@ -498,45 +545,44 @@ class LuaValue(object):
 
                 ret[key] = value
 
-                # removes value, leaves key for next iteration
+                # removes [value], leaving [key] for next iteration
                 lua_pop(self.L, 1)
 
             return ret
-        elif kind == _executor.LUA_TFUNCTION:
-            return self # we're already callable
 
-        elif kind == _executor.LUA_TUSERDATA and self._is_capsule(idx):
-            ptr_v = ctypes.c_void_p(lua_touserdata(self.L, -1))
+        elif kind == _executor.LUA_TFUNCTION:
+            # it's already callable so we just need to return a RegistryValue
+            # that represents it. We use a RegistryValue instead of a
+            # StackValue because our caller is expecting to get a Python object
+            # that they can just pass around without doing any stack management
+            with StackValue(self.executor, idx=idx)._bring_to_top() as sv:
+                ret = sv.as_ref()
+            return ret
+
+        ###### LEFT OFF HERE: problem is is_capsule isn't being threaded around?
+        elif kind == _executor.LUA_TUSERDATA and self.is_capsule(idx):
+            ptr_v = ctypes.c_void_p(lua_touserdata(self.L, idx))
             ptr_py = decapsule(ptr_v)
             return ptr_py
 
         else:
-            raise LuaException("can't coerce %s" % self.type_name())
-
-    def is_capsule(self):
-        with self._bring_to_top():
-            return self._is_capsule(-1)
+            raise LuaException("can't coerce %s" % self.lua_type_name())
 
     @check_stack(2, 0)
-    def _is_capsule(self, idx):
+    def is_capsule(self, idx=None):
+        if idx is None:
+            idx = self.idx
         idx = abs_index(self.L, idx)
-
         if not lua_getmetatable(self.L, idx):
             return False
-
+        # stack is [metatable]
         lua_pushstring(self.L, "capsule")
-        lua_rawget(self.L, -2)
+        # stack is [metatable, magic string]
+        lua_rawget(self.L, -2)  # pops [magic string], adds [value]
+        # stack is [metatable, value|nil]
         ret = not lua_isnil(self.L, -1)
-
-        # metatable and value|nil is on the stack
+        # stack is [metatable, value|nil] so clear them off
         lua_pop(self.L, 2)
-
-        return ret
-
-    @check_stack(1, 0)
-    def to_python(self):
-        with self._bring_to_top():
-            ret = self._to_python(-1)
         return ret
 
     @check_stack(1)
@@ -555,22 +601,25 @@ class LuaValue(object):
 
         before_top = lua_gettop(self.L)
 
-        try:
-            lua_args = map(lambda x: LuaValue.from_python(self.executor, x), args)
-        except Exception:
-            # get ourselves off of the stack
-            lua_pop(self.L, 1)
-            raise
+        lua_args = []
 
-        for la in lua_args:
-            la._bring_to_top(False)
+        # get all of the args on the stack and ready
+        for arg in args:
+            try:
+                sv = StackValue.from_python(self.executor, arg)
+            except Exception:
+                # get ourself and the args so far off of the stack
+                lua_pop(self.l, 1+len(lua_args))
+                raise
+            else:
+                lua_args.append(sv)
 
         # allocation limiting must only be turned on while we're operating
         # inside of a pcall, or Lua's crazy longjmp thing will kick in
         enable_limit_memory(self.L)
 
-        # lua_pcallk will pop the function all of the arguments that we added,
-        # whether or not it fails
+        # lua_pcallk will pop the function and all of the arguments that we
+        # added, whether or not it fails
         pcall_ret = lua_pcallk(self.L,
                                len(lua_args), _executor.LUA_MULTRET,
                                0, 0, None)
@@ -582,8 +631,12 @@ class LuaValue(object):
 
             rets = []
 
+            # consumes them from the stack as we go
             for _ in xrange(1+after_top-before_top):
-                rets.append(LuaValue(self.executor))
+                # this puts them into RegistryValues but they could just as
+                # easy be StackValues to be translated in
+                # RegistryValue.__call__ like we do other things
+                rets.append(RegistryValue(self.executor))
 
             rets.reverse()
 
@@ -602,65 +655,79 @@ class LuaValue(object):
             raise LuaException("Unknown return value from lua_pcallk: %r"
                                % (pcall_ret,))
 
-    @check_stack(2, 0)
-    def __getitem__(self, key):
+
+    @contextlib.contextmanager
+    def as_buffer(self):
         """
-        If we're a table, get the given field as LuaValue
+        Yields a buffer() directly into the memory that contains this Lua string.
+
+        This is useful for zero-allocation access to lua strings, but comes at
+        the cost of needing to be very careful with how you affect the Lua VM
+        while you hold onto this reference. The referred string must remain on
+        the Lua stack the whole time you retain a reference to it, you must
+        release that reference before as_buffer() returns, and you must never
+        write to the buffer
+        """
+        if self.lua_type() != _executor.LUA_TSTRING:
+            raise TypeError("as_buffer only works on strings, not %s!"
+                            % (self.lua_type_name(),))
+
+        size = ctypes.c_size_t(0)
+        ptr = lua_tolstring(self.L, self.idx, ctypes.byref(size))
+        # size-1 because Lua includes room for a null byte but we don't
+        # need it
+        cls = (ctypes.c_char * size.value)
+        buff = cls.from_address(ptr)
+        yield buff
+
+    @check_stack(2, 0)
+    def getitem(self, key):
+        """
+        If we're a table, get the given field as RegistryValue
 
         We follow the Lua convention of returning nil for non-present keys
         """
+        if self.lua_type() != _executor.LUA_TTABLE:
+            raise TypeError("can only index tables, not %r"
+                            % (self.lua_type_name(),))
 
-        key = LuaValue.from_python(self.executor, key)
+        key = StackValue.from_python(self.executor, key)
+        # stack is [key]
+        lua_rawget(self.L, self.idx)  # consumes [key] leaving [value]
+        ret = RegistryValue(self.executor)   # consumes [value] leaving []
+        return ret
 
-        with self._bring_to_top():
-            kind = lua_type(self.L, -1)
+    @check_stack(2, 0)
+    def setitem(self, key, value):
+        if self.lua_type() != _executor.LUA_TTABLE:
+            raise TypeError("can only index tables, not %r"
+                            % (self.lua_type_name(),))
 
-            if kind != _executor.LUA_TTABLE:
-                raise TypeError("can only index tables, not %r"
-                                % (self.type_name(),))
+        # if we throw an exception, how many things need popping
+        err_stack = 0
 
-            key._bring_to_top(False)
+        try:
+            key = StackValue.from_python(self.executor, key)
+            err_stack += 1
+            value = StackValue.from_python(self.executor, value)
+            err_stack += 1
+        except Exception as e:
+            lua_pop(self.L, err_stack)
+            raise
 
-            # now the table is at -2 and the key is at -1
-            lua_rawget(self.L, -2)
-
-            # now the table is at -2 and the value is at -1
-            ret = LuaValue(self.executor)
-
-            # now only the table remains, which _bring_to_top will clean up
-            return ret
-
-    @check_stack(3, 0)
-    def __setitem__(self, key, value):
-        key = LuaValue.from_python(self.executor, key)
-        value = LuaValue.from_python(self.executor, value)
-
-        with self._bring_to_top():
-            kind = lua_type(self.L, -1)
-            if kind != _executor.LUA_TTABLE:
-                raise TypeError("can only index tables, not %r"
-                                % (self.type_name(),))
-
-            key._bring_to_top(False)
-            value._bring_to_top(False)
-
-            # consumes the key and the value, leaving the table
-            lua_rawset(self.L, -3)
+        # stack is [key, value]
+        lua_rawset(self.L, self.idx) # consumes both leaving []
 
     @check_stack(1, 0)
     def is_nil(self):
-        with self._bring_to_top():
-            kind = lua_type(self.L, -1)
-            return kind == _executor.LUA_TNIL
-
-    def __repr__(self):
-        return "<%s (%s) %s:%d>" % (self.__class__.__name__,
-                                    self.type_name(),
-                                    self.executor.name,
-                                    self.key)
+        return self.lua_type() == _executor.LUA_TNIL
 
     @classmethod
     def from_python(cls, executor, val, recursion=0, max_recursion=10):
+        """
+        Construct a StackValue out of a Python object, recursively, including
+        dealing with Capsules/callables. Leaves it as a new value on the stack
+        """
         # weird argument rearranging to make @check_stack and copy paste
         # easier
         return cls._from_python(executor, cls, val,
@@ -668,7 +735,7 @@ class LuaValue(object):
                                 max_recursion=max_recursion)
 
     @staticmethod
-    @check_stack(3, 0)
+    @check_stack(3, 1)
     def _from_python(self, cls, val, recursion=0, max_recursion=10):
         if recursion > max_recursion:
             raise ValueError("recursed too much (%d>%d)"
@@ -676,25 +743,26 @@ class LuaValue(object):
 
         executor = self
 
-        if isinstance(val, LuaValue):
+        if isinstance(val, _LuaValue):
             # it's already a Lua value
-            return val
+            sv = val._bring_to_top(False)
+            return sv
 
         elif val is None:
             lua_pushnil(self.L)
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif isinstance(val, bool):
             lua_pushboolean(self.L, 1 if val else 0)
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif isinstance(val, (int, long, float)):
             lua_pushnumber(self.L, lua_number_type(val))
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif isinstance(val, str):
             lua_pushlstring(self.L, val, ctypes.c_size_t(len(val)))
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif isinstance(val, unicode):
             as_str = val.encode('utf8')
@@ -712,34 +780,35 @@ class LuaValue(object):
         elif isinstance(val, dict):
             lua_createtable(self.L, 0, len(val))
 
+            # stack is [table]
+
             for k, v in val.iteritems():
-                # this works but it creates a lot of overhead because it makes
-                # a lot of round trips through the registry table. we can
-                # probably make this faster by making this function more
-                # directly recursive
+                # if an exception is thrown, how many things need popping from
+                # the stack (starting with just [table])
+                err_stack = 1
 
                 try:
                     key = cls.from_python(executor, k,
                                           recursion=recursion+1,
                                           max_recursion=max_recursion)
+                    err_stack += 1
                     value = cls.from_python(executor, v,
                                             recursion=recursion+1,
                                             max_recursion=max_recursion)
+                    err_stack += 1
                 except Exception:
                     # if either of those fail, we need to get the table off of
                     # the stack too before we raise up
-                    lua_pop(self.L, 1)
+                    lua_pop(self.L, err_stack)
                     raise
 
-                key._bring_to_top(False)
-                value._bring_to_top(False)
-                # -3 because value is -1, key is -2, so the table must be -3
-                lua_rawset(self.L, -3)
+                # stack is now [table, key, value]
 
-                # that consumes the key and value, leaving the table
+                lua_rawset(self.L, -3) # -3 is the table
+                # that consumes [key, value], leaving [table]
 
             # now the table should be at the top
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif isinstance(val, (list, tuple)):
             # this is mostly identical to dict
@@ -747,23 +816,25 @@ class LuaValue(object):
             lua_createtable(self.L, len(val), 0)
 
             for i, value in enumerate(val, 1):
-                # like for dict this could definitely be faster
+                # if an exception is thrown, how many things need popping from
+                # the stack (starting with just [table])
+                err_stack = 1
 
                 try:
                     lvalue = cls.from_python(executor, value,
                                              recursion=recursion+1,
                                              max_recursion=max_recursion)
+                    err_stack += 1
                 except Exception:
-                    # if that fails, we need to get the integer and the table
-                    # off of the stack before we raise up
-                    lua_pop(self.L, 1)
+                    lua_pop(self.L, err_stack)
                     raise
 
-                lvalue._bring_to_top(False)
-                lua_rawseti(self.L, -2, i)
+                # stack is [table, value]
+                lua_rawseti(self.L, -2, i) # consumes [value]
+                # stack is [table]
 
             # now the table should be at the top
-            return LuaValue(executor)
+            return StackValue(executor)
 
         elif callable(val) or isinstance(val, Capsule):
             lval = val.inner if isinstance(val, Capsule) else val
@@ -786,32 +857,129 @@ class LuaValue(object):
                                  recursive,
                                  raw_lua_args)
 
-            # consume the userdata (now with the metatable set)
-            return LuaValue(executor)
+            sv = StackValue(executor)
+            # stack is [userdata]
+
+            # leave the userdata on the stack with the metatable set
+            return StackValue(executor)
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 
+
+class RegistryValue(_LuaValue):
+    """
+    Represents a Lua value stored on the Heap
+
+    This works by using the Lua registry and keeping refs into it. It's safe
+    for these values to escape and be kept in Python memory but there's some
+    overhead to getting stuff into and out of the registry all of the time
+    """
+
+    def __init__(self, executor):
+        """
+        Build a RegistryValue off of whatever's on the top of the stack, then
+        pop it off. We store the underlying Lua value in Lua's global registry
+        and we keep track of the ref
+        """
+        assert isinstance(executor, Lua), "expected Lua, got %r" % (executor,)
+
+        # it's important that we keep a reference to the executor because he's
+        # the one that keeps the lua_State* live
+        self.executor = executor
+        self.L = executor.L
+        self._create()
+
+    @check_stack(2, -1)
+    def _create(self):
+        # right now the top of the stack contains the item that we're storing
+
+        # pops it off and stores the integer reference in the registry
+        self.key = luaL_ref(self.L, _executor.LUA_REGISTRYINDEX)
+
+        # now we've consumed it from the stack so it's empty for our purposes
+
+        # this is a little weird, but we need to hold on to these so that our
+        # __del__ has access to them
+        self.cleanup_cache = dict(
+            luaL_unref=luaL_unref,
+            LUA_REGISTRYINDEX=_executor.LUA_REGISTRYINDEX,
+        )
+
+    def __del__(self):
+        # this takes us out of the registry. if we refer to a Python object,
+        # freeing that may trigger the __gc metamethod which will eventually
+        # tell Python to free it as well
+        self.cleanup_cache['luaL_unref'](self.L,
+            self.cleanup_cache['LUA_REGISTRYINDEX'],
+            self.key)
+
+    def __repr__(self):
+        return "<%s (%s) %s:%d>" % (self.__class__.__name__,
+                                    self.lua_type_name(),
+                                    self.executor.name,
+                                    self.key)
+
+    def as_ref(self):
+        return self
+
+    # from here on out we're duplicating/translating StackValue methods
+
+    @contextlib.contextmanager
+    def _bring_to_top(self, cleanup_after=True):
+        "Get the value to the top of the stack"
+        if not lua_checkstack(self.L, 1):
+            raise LuaOutOfMemoryException("_bring_to_top.checkstack")
+
+        # get the value to the top of the stack
+        lua_rawgeti(self.L, _executor.LUA_REGISTRYINDEX, self.key)
+
+        if cleanup_after:
+            return self.__bring_to_top_cleanup()
+
+    def __bring_to_top_cleanup(self):
+        try:
+            new_sv = StackValue(self.executor, -1)
+            yield new_sv
+        finally:
+            lua_pop(self.L, 1)
+
+    def _stack_value(fn_name):
+        sv_descriptor = getattr(StackValue, fn_name)
+
+        @wraps(sv_descriptor)
+        def _with_stack_value(self, *a, **kw):
+            with self._bring_to_top() as sv:
+                return sv_descriptor(sv, *a, **kw)
+        return _with_stack_value
+
+    lua_type = _stack_value('lua_type')
+    lua_type_name = _stack_value('lua_type_name')
+    is_nil = _stack_value('is_nil')
+    is_capsule = _stack_value('is_capsule')
+    to_python = _stack_value('to_python')
+
     @contextlib.contextmanager
     def as_buffer(self):
-        """
-        Yields a buffer() directly into the memory that contains this Lua string.
+        with self._bring_to_top() as sv:
+            with sv.as_buffer() as buff:
+                yield buff
 
-        This is useful for zero-allocation access to lua strings, but comes at
-        the cost of needing to be very careful with how you affect the Lua VM
-        while you hold onto this reference. The referred string must remain on
-        the Lua stack the whole time you retain a reference to it, you must
-        release that reference before as_buffer() returns, and you must never
-        write to the buffer
-        """
-        with self._bring_to_top():
-            kind = lua_type(self.L, -1)
-            if kind != _executor.LUA_TSTRING:
-                raise TypeError("as_buffer only works on strings, not %s!"
-                                % lua_typename(self.L, kind))
-            buff_obj = lua_string_to_python_buffer(self.L, -1)
-            yield buff_obj
-            # buff_obj gets dereferenced now
-        # value is no longer on the stack
+    def __setitem__(self, key, value):
+        with self._bring_to_top() as sv:
+            sv.setitem(key, value)
+
+    def __getitem__(self, key):
+        with self._bring_to_top() as sv:
+            return sv.getitem(key).as_ref()
+
+    def __call__(self, *args):
+        with self._bring_to_top() as sv:
+            # he returns RegistryValues for our convenience here
+            return sv(*args)
+
+    @classmethod
+    def from_python(cls, executor, val):
+        return StackValue.from_python(executor, val).to_ref()
 
 
 def _callable_wrapper(executor, val, raw_lua_args=False):
@@ -820,26 +988,32 @@ def _callable_wrapper(executor, val, raw_lua_args=False):
 
     args = []
 
+    # eat the arguments off of the stack
     for _ in xrange(1, nargs):
         if raw_lua_args:
-            args.append(LuaValue(executor))
+            # we pass him RegistryValues because we don't know if he's going to
+            # keep any of his own references, for instance if he memoises
+            # himself
+            args.append(RegistryValue(executor))
         else:
-            args.append(LuaValue(executor).to_python())
+            sv = StackValue(executor)
+            as_py = sv.to_python()
+            sv.pop()
+            args.append(as_py)
 
     args.reverse()
 
     ret = val(*args)
 
-    as_lua = LuaValue.from_python(executor, ret)
-
-    # leave this on top of the stack for
-    # call_python_function_from_lua to do the rest
-    as_lua._bring_to_top(False)
+    # leave this on top of the stack for call_python_function_from_lua to do
+    # the rest
+    as_lua = StackValue.from_python(executor, ret)
 
 
 def _indexable_wrapper(executor, indexable, should_cache, recursive):
-    index_lua = LuaValue(executor)
+    index_lua = StackValue(executor)
     index_python = index_lua.to_python()
+    index_lua.pop()
 
     try:
         found_python = indexable[index_python]
@@ -852,13 +1026,16 @@ def _indexable_wrapper(executor, indexable, should_cache, recursive):
         capsule = Capsule(found_python,
                           cache=should_cache,
                           recursive=True)
-        lv = LuaValue.from_python(executor,
-                                  capsule)
-        return lv._bring_to_top(False)
+        StackValue.from_python(executor,
+                               capsule)
+        # stack is just [capsule]
+        # leave that on the stack to be returned
+        return
 
     # otherwise try to serialise the value the normal way
-    lv = LuaValue.from_python(executor, found_python)
-    return lv._bring_to_top(False)
+    StackValue.from_python(executor, found_python)
+    # stack is [value]
+    # leave that on the stack to be returned
 
 
 class Capsule(object):
@@ -896,8 +1073,9 @@ class LuaStateException(LuaException):
         # there's currently an error on the top of the Lua stack so extract
         # it, turn it into a Python exception, and raise it.
 
-        self.lua_value = lua_value = LuaValue(executor)
-        typ = lua_value.type()
+        self.lua_value = lua_value = RegistryValue(executor)
+
+        typ = lua_value.lua_type()
         # pretty-print if it's easy
         if typ in (
                 _executor.LUA_TNUMBER,
@@ -973,8 +1151,8 @@ class SandboxedExecutor(object):
                     raise LuaException("couldn't setfenv?")
 
             else:
-                # this seems really magical but it it replaces the _ENV
-                # variable for this chunk (then pops the value)
+                # this seems really magical but it replaces the _ENV variable
+                # for this chunk (then pops the value)
                 ret = lua_setupvalue(self.L, -2, 1)
                 if ret is None:
                     raise LuaException("couldn't set upvalue?")

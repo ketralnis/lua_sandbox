@@ -376,7 +376,7 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(self.ex.lua['x'].to_python(), 5.0)
 
         # nils
-        self.assertEqual(self.ex.lua['bar'].type_name(), 'nil')
+        self.assertEqual(self.ex.lua['bar'].lua_type_name(), 'nil')
         self.assertEqual(self.ex.lua['bar'].to_python(), None)
 
         # loaded code can get to it
@@ -388,7 +388,7 @@ class TestLuaExecution(unittest.TestCase):
         t = self.ex.lua.create_table()
         t['foo'] = 5
         self.assertEquals(t['foo'].to_python(), 5.0)
-        self.assertEquals(t['bar'].type_name(), 'nil')
+        self.assertEquals(t['bar'].lua_type_name(), 'nil')
         self.assertEquals(t['bar'].to_python(), None)
         self.assertTrue(t['bar'].is_nil())
 
@@ -534,7 +534,7 @@ if __name__ == '__main__':
         tr = tracker.SummaryTracker()
 
         def _fn():
-            for _ in range(10):
+            for _ in xrange(10000):
                 unittest.main(verbosity=0, exit=False)
 
         while True:

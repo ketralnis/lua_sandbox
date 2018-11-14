@@ -655,8 +655,8 @@ PyObject* lua_string_to_python_buffer(lua_State* L, int idx) {
     // make sense and (2) lua_tolstring will *convert* it into a string,
     // destructively
     size_t size = 0;
-    void* ptr = lua_tolstring(L, idx, &size);
-    PyObject* buff = PyBuffer_FromMemory(ptr, size); // new reference
+    const char* ptr = lua_tolstring(L, idx, &size);
+    PyObject* buff = PyBuffer_FromMemory((void*)ptr, size); // new reference
     // return that reference. it's up to our caller to free it, and to *not*
     // keep a reference to it after the string is no longer on the stack
     return buff;

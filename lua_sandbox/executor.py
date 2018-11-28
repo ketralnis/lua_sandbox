@@ -212,8 +212,8 @@ def check_stack(needs=0, expected=0):
                 if after_top-before_top != expected:
                     # the no-exception case
                     raise LuaInvariantException(
-                        ("check_stack in %r (needs=%d/expected=%d/before_top=%d,after_top=%d)")
-                         % (fn, needs, expected, before_top, after_top))
+                        "check_stack in %r (needs=%d/expected=%d/before_top=%d,after_top=%d) -> %r"
+                        % (fn, needs, expected, before_top, after_top, ret))
                 return ret
             except LuaOutOfMemoryException:
                 # if we ran out of ram the whole instance is probably blown so
@@ -230,8 +230,8 @@ def check_stack(needs=0, expected=0):
                     # that we're now unsure about the state of
                     logging.exception("double failure in lua_sandbox")
                     raise LuaInvariantException(
-                        ("check_stack in %r on %r (needs=%d/expected=%d/before_top=%d,after_top=%d)")
-                         % (fn, ex, needs, expected, before_top, after_top))
+                        "check_stack in %r on %r (needs=%d/expected=%d/before_top=%d,after_top=%d)"
+                        % (fn, ex, needs, expected, before_top, after_top))
                 # otherwise it's just a regular exception so reraise whatever
                 # it was
                 raise
@@ -600,6 +600,7 @@ class StackValue(_LuaValue):
             raise LuaOutOfMemoryException("__call__.checkstack")
 
         before_top = lua_gettop(self.L)
+        print 'bt', before_top
 
         lua_args = []
 
@@ -628,6 +629,7 @@ class StackValue(_LuaValue):
 
         if pcall_ret == _executor.LUA_OK:
             after_top = lua_gettop(self.L)
+            print 'at', after_top
 
             rets = []
 
@@ -964,14 +966,17 @@ class RegistryValue(_LuaValue):
             with sv.as_buffer() as buff:
                 yield buff
 
+    @check_stack(1, 0)
     def __setitem__(self, key, value):
         with self._bring_to_top() as sv:
             sv.setitem(key, value)
 
+    @check_stack(1, 0)
     def __getitem__(self, key):
         with self._bring_to_top() as sv:
             return sv.getitem(key).as_ref()
 
+    @check_stack(1, 0)
     def __call__(self, *args):
         with self._bring_to_top() as sv:
             # he returns RegistryValues for our convenience here

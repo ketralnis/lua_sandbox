@@ -594,13 +594,15 @@ class StackValue(_LuaValue):
         # craziness. Because of this, the actual call site is in
         # _executormodule.c who can better deal with that stuff
 
+        print 'bt-1', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+
         self._bring_to_top(False)  # lua_pcallk consumes
 
         if not lua_checkstack(self.L, 2+len(args)):
             raise LuaOutOfMemoryException("__call__.checkstack")
 
         before_top = lua_gettop(self.L)
-        print 'bt', before_top
+        print 'bt', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
 
         lua_args = []
 
@@ -615,6 +617,8 @@ class StackValue(_LuaValue):
             else:
                 lua_args.append(sv)
 
+        print 'bt2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+
         # allocation limiting must only be turned on while we're operating
         # inside of a pcall, or Lua's crazy longjmp thing will kick in
         enable_limit_memory(self.L)
@@ -625,11 +629,13 @@ class StackValue(_LuaValue):
                                len(lua_args), _executor.LUA_MULTRET,
                                0, 0, None)
 
+        print 'at0', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+
         disable_limit_memory(self.L)
 
         if pcall_ret == _executor.LUA_OK:
             after_top = lua_gettop(self.L)
-            print 'at', after_top
+            print 'at1', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
 
             rets = []
 
@@ -639,6 +645,8 @@ class StackValue(_LuaValue):
                 # easy be StackValues to be translated in
                 # RegistryValue.__call__ like we do other things
                 rets.append(RegistryValue(self.executor))
+
+            print 'at2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
 
             rets.reverse()
 
@@ -926,18 +934,20 @@ class RegistryValue(_LuaValue):
 
     # from here on out we're duplicating/translating StackValue methods
 
-    @contextlib.contextmanager
     def _bring_to_top(self, cleanup_after=True):
         "Get the value to the top of the stack"
         if not lua_checkstack(self.L, 1):
             raise LuaOutOfMemoryException("_bring_to_top.checkstack")
 
         # get the value to the top of the stack
+        print 'X1', self.key, lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
         lua_rawgeti(self.L, _executor.LUA_REGISTRYINDEX, self.key)
+        print 'X2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
 
         if cleanup_after:
             return self.__bring_to_top_cleanup()
 
+    @contextlib.contextmanager
     def __bring_to_top_cleanup(self):
         try:
             new_sv = StackValue(self.executor, -1)
@@ -976,11 +986,16 @@ class RegistryValue(_LuaValue):
         with self._bring_to_top() as sv:
             return sv.getitem(key).as_ref()
 
-    @check_stack(1, 0)
+    # @check_stack(1, 0) TODO
     def __call__(self, *args):
+        print 1, lua_gettop(self.L)
         with self._bring_to_top() as sv:
+            print 2, lua_gettop(self.L)
             # he returns RegistryValues for our convenience here
-            return sv(*args)
+            ret = sv(*args)
+            print 3, lua_gettop(self.L)
+        print 4, lua_gettop(self.L)
+        return ret
 
     @classmethod
     def from_python(cls, executor, val):
@@ -1119,8 +1134,9 @@ class SandboxedExecutor(object):
         loaded_sandboxer = self.ex.load(
             sandboxer,
             desc='%s.sandboxer' % self.ex.name)
-
-        self.sandbox = loaded_sandboxer()[0]
+        print '*'*20, loaded_sandboxer
+        sandboxer_result = loaded_sandboxer()
+        self.sandbox = sandboxer_result[0]
 
         # now that the env is built, build the libs in that env too
         for i, lib in enumerate(libs, 1):

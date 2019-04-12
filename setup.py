@@ -57,6 +57,6 @@ setup(
     zip_safe=False,
     include_package_data=True,
     install_requires=[
-        ""
+        "mock==1.0.0",
     ],
 )

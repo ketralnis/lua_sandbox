@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+from mock import patch
 import multiprocessing
 import os
 import re
@@ -7,14 +8,14 @@ import threading
 import time
 import unittest
 
+from lua_sandbox.executor import Capsule
 from lua_sandbox.executor import LuaException
-from lua_sandbox.executor import LuaInvariantException
 from lua_sandbox.executor import LuaOutOfMemoryException
 from lua_sandbox.executor import LuaSyntaxError
 from lua_sandbox.executor import SandboxedExecutor
-from lua_sandbox.executor import check_stack
 from lua_sandbox.executor import _executor
-from lua_sandbox.executor import Capsule
+from lua_sandbox.executor import check_stack
+from lua_sandbox.executor import logging as executor_logging
 
 
 class SimpleSandboxedExecutor(object):
@@ -75,8 +76,11 @@ class TestLuaExecution(unittest.TestCase):
         def _fn(executor):
             executor.create_table()._bring_to_top(False)
 
-        with self.assertRaises(LuaException):
-            check_stack(0, 0)(_fn)(self.ex.lua)
+        with patch.object(executor_logging, 'exception') as mock_logging:
+            with self.assertRaises(LuaException):
+                check_stack(0, 0)(_fn)(self.ex.lua)
+
+            mock_logging.assert_called_once()
 
     def test_parse_error(self):
         program = "()code"

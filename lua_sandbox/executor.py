@@ -993,7 +993,7 @@ class RegistryValue(_LuaValue):
         with self._bring_to_top() as sv:
             return sv.getitem(key).as_ref()
 
-    # @check_stack(1, 0) TODO
+    @check_stack(1, 0)
     def __call__(self, *args):
         # print 1, lua_gettop(self.L)
         with self._bring_to_top() as sv:

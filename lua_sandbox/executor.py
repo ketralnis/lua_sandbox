@@ -345,7 +345,7 @@ class Lua(object):
         # stack is [sv]
         lua_rawget(self.L, _executor.LUA_REGISTRYINDEX)
         # consumes sv leaving [registry]
-        return RegistryValue(self) # consumes [registry]
+        return RegistryValue(self) # consumes [registry] leaving []
 
     @check_stack(1, 0)
     def set_global(self, key, value):
@@ -354,7 +354,7 @@ class Lua(object):
 
         sv = StackValue.from_python(self, value)
         # stack is [value]
-        lua_setglobal(self.L, key) # consumes value leaving []
+        lua_setglobal(self.L, key) # consumes [value] leaving []
 
     def __setitem__(self, key, value):
         return self.set_global(key, value)
@@ -369,7 +369,7 @@ class Lua(object):
 
         lua_getglobal(self.L, key)
         # stack is [value]
-        return RegistryValue(self) # consumes [value]
+        return RegistryValue(self) # consumes [value] leaving []
 
     def __getitem__(self, key):
         return self.get_global(key)
@@ -392,7 +392,7 @@ class Lua(object):
 
         if load_ret == _executor.LUA_OK:
             # stack is [code]
-            return RegistryValue(self)  # consumes code
+            return RegistryValue(self)  # consumes code leaving []
         elif load_ret == _executor.LUA_ERRSYNTAX:
             raise LuaSyntaxError(self)
         elif load_ret == _executor.LUA_ERRMEM:

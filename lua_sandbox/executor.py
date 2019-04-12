@@ -154,6 +154,10 @@ def lua_isnil(L, idx):
     return lua_type(L, idx) == _executor.LUA_TNIL
 
 
+def luaL_typename(L, idx):
+    return lua_typename(L, lua_type(L, idx))
+
+
 if _executor.LUA_VERSION_NUM == 501:
     lua_pcallk = executor_lib_nogil.memory_safe_pcallk
 
@@ -594,15 +598,18 @@ class StackValue(_LuaValue):
         # craziness. Because of this, the actual call site is in
         # _executormodule.c who can better deal with that stuff
 
-        print 'bt-1', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'bt-2', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         self._bring_to_top(False)  # lua_pcallk consumes
+
+        # smking gun? it's not on top after this?
+        # print 'bt-1', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         if not lua_checkstack(self.L, 2+len(args)):
             raise LuaOutOfMemoryException("__call__.checkstack")
 
         before_top = lua_gettop(self.L)
-        print 'bt', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'bt', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         lua_args = []
 
@@ -617,7 +624,7 @@ class StackValue(_LuaValue):
             else:
                 lua_args.append(sv)
 
-        print 'bt2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'bt2', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         # allocation limiting must only be turned on while we're operating
         # inside of a pcall, or Lua's crazy longjmp thing will kick in
@@ -629,13 +636,13 @@ class StackValue(_LuaValue):
                                len(lua_args), _executor.LUA_MULTRET,
                                0, 0, None)
 
-        print 'at0', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'at0', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         disable_limit_memory(self.L)
 
         if pcall_ret == _executor.LUA_OK:
             after_top = lua_gettop(self.L)
-            print 'at1', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+            # print 'at1', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
             rets = []
 
@@ -646,7 +653,7 @@ class StackValue(_LuaValue):
                 # RegistryValue.__call__ like we do other things
                 rets.append(RegistryValue(self.executor))
 
-            print 'at2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+            # print 'at2', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
             rets.reverse()
 
@@ -940,9 +947,9 @@ class RegistryValue(_LuaValue):
             raise LuaOutOfMemoryException("_bring_to_top.checkstack")
 
         # get the value to the top of the stack
-        print 'X1', self.key, lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'X1', self.key, lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
         lua_rawgeti(self.L, _executor.LUA_REGISTRYINDEX, self.key)
-        print 'X2', lua_gettop(self.L), lua_gettop(self.L) and lua_typename(self.L)
+        # print 'X2', lua_gettop(self.L), lua_gettop(self.L) and luaL_typename(self.L, -1)
 
         if cleanup_after:
             return self.__bring_to_top_cleanup()
@@ -988,13 +995,13 @@ class RegistryValue(_LuaValue):
 
     # @check_stack(1, 0) TODO
     def __call__(self, *args):
-        print 1, lua_gettop(self.L)
+        # print 1, lua_gettop(self.L)
         with self._bring_to_top() as sv:
-            print 2, lua_gettop(self.L)
+            # print 2, lua_gettop(self.L)
             # he returns RegistryValues for our convenience here
             ret = sv(*args)
-            print 3, lua_gettop(self.L)
-        print 4, lua_gettop(self.L)
+            # print 3, lua_gettop(self.L)
+        # print 4, lua_gettop(self.L)
         return ret
 
     @classmethod
@@ -1134,7 +1141,7 @@ class SandboxedExecutor(object):
         loaded_sandboxer = self.ex.load(
             sandboxer,
             desc='%s.sandboxer' % self.ex.name)
-        print '*'*20, loaded_sandboxer
+        # print '*'*20, loaded_sandboxer
         sandboxer_result = loaded_sandboxer()
         self.sandbox = sandboxer_result[0]
 

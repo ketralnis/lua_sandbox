@@ -32,7 +32,7 @@ lldbtest: ${INSTALLEDENV}
 	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}
 
 gdbtest: ${INSTALLEDENV}
-	gdb -ex=r --args .env/bin/python -m lua_sandbox.tests.tests ${TEST}
+	gdb -ex=r -ex=bt --args .env/bin/python -m lua_sandbox.tests.tests ${TEST}
 
 clean:
 	find lua_sandbox -type f -name \*.pyc -delete -print

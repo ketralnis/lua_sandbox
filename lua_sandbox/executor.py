@@ -979,13 +979,9 @@ class RegistryValue(_LuaValue):
 
     @check_stack(1, 0)
     def __call__(self, *args):
-        # print 1, lua_gettop(self.L)
         with self._bring_to_top() as sv:
-            # print 2, lua_gettop(self.L)
             # he returns RegistryValues for our convenience here
             ret = sv(*args)
-            # print 3, lua_gettop(self.L)
-        # print 4, lua_gettop(self.L)
         return ret
 
     @classmethod
@@ -1125,7 +1121,6 @@ class SandboxedExecutor(object):
         loaded_sandboxer = self.ex.load(
             sandboxer,
             desc='%s.sandboxer' % self.ex.name)
-        # print '*'*20, loaded_sandboxer
         sandboxer_result = loaded_sandboxer()
         self.sandbox = sandboxer_result[0]
 

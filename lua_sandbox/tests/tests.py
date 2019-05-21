@@ -287,17 +287,71 @@ class TestLuaExecution(unittest.TestCase):
         ret = self.ex.execute(program, {'doubler': MyObject().double})
         self.assertEqual((8.0,), ret)
 
+    def test_regular_exception(self):
+        program = """
+            error("I'm an error!")
+        """
+        try:
+            self.ex.execute(program)
+        except LuaException as e:
+            self.assertEqual(str(e), 'LuaStateException(\'[string "Lua"]:2: I\\\'m an error!\')')
+        else:
+            self.assertTrue(False)
+
+    def test_number_exception(self):
+        program = """
+            error(3.14159)
+        """
+        try:
+            self.ex.execute(program)
+        except LuaException as e:
+            self.assertEqual(str(e), 'LuaStateException(\'[string "Lua"]:2: 3.14159\')')
+            # lua doesn't thread the original number back, it coerces to a
+            # string
+            self.assertEqual(e.lua_value.to_python(), '[string "Lua"]:2: 3.14159')
+        else:
+            self.assertTrue(False)
+
+    def test_table_exception(self):
+        program = """
+            error({['whole message']= 'this is my message'})
+        """
+        try:
+            self.ex.execute(program)
+        except LuaException as e:
+            self.assertEqual(e.lua_value.to_python(), {
+                'whole message': 'this is my message',
+            })
+        else:
+            self.assertTrue(False)
+
     def test_pyfunction_exception(self):
         program = """
             return foo("hello")
         """
+        class MyException(Exception): pass
+
         def bad_closure(x):
-            raise Exception("nuh uh")
+            raise MyException("nuh uh")
 
         try:
             self.ex.execute(program, {'foo': bad_closure})
         except LuaException as e:
-            self.assertIn('nuh uh', e.message)
+            self.assertIsInstance(e.lua_value.to_python(), MyException)
+            self.assertIsInstance(e.__cause__, MyException)
+        else:
+            self.assertTrue(False)
+
+    def test_pyobject_exception(self):
+        obj = object()
+        program = """
+            error(foo)
+        """
+
+        try:
+            self.ex.execute(program, {'foo': Capsule(obj)})
+        except LuaException as e:
+            self.assertIs(e.lua_value.to_python(), obj)
         else:
             self.assertTrue(False)
 

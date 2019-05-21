@@ -20,7 +20,8 @@
     ((i) > 0 || (i) <= LUA_REGISTRYINDEX ? (i) : \
     lua_gettop(L) + (i) + 1)
 
-int install_control_block(lua_State *L, size_t max_memory) {
+int install_control_block(lua_State *L, size_t max_memory,
+                          PyObject* references) {
     lua_control_block* control = malloc(sizeof(lua_control_block));
 
     if(control==NULL) {
@@ -36,6 +37,12 @@ int install_control_block(lua_State *L, size_t max_memory) {
     (control->memory).old_allocf = old_allocf;
     (control->memory).old_ud = old_ud;
     (control->runtime).enabled = 0;
+
+    // our python refcounting strategy is to add python objects here. when we
+    // have objects in here, we're signalling that python can't clean them up.
+    // doing this instead of explicit refcounting lets us deal better with
+    // reference cycles. See executor.py:Lua.__init__ for more details
+    control->references = references;
 
 #if LUA_VERSION_NUM == 501
     control->panic_return = NULL;
@@ -324,24 +331,9 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
     PyErr_NormalizeException(&ptype, &pvalue, &ptraceback);
     PyErr_Clear();
 
-    char* error_message = "unknown error executing Python code";
+    // make a capsule so we can safely get it back to Python land
+    store_python_capsule(L, pvalue, 0, 0, 0);
 
-    PyObject* repr = PyObject_Repr(pvalue);
-    if(repr == NULL) {
-        // fine we just won't use it then
-        PyErr_WarnEx(NULL, "call_python_function_from_lua couldn't make repr", 0);
-        PyErr_Print();
-        PyErr_Clear();
-    } else if(!PyString_CheckExact(repr)) {
-        // if repr doesn't return a string we can't use it
-        PyErr_WarnEx(NULL, "got non string from PyObject_Repr", 0);
-    } else {
-        error_message = PyString_AsString(repr);
-    }
-
-    lua_pushstring(L, error_message);
-
-    Py_XDECREF(repr);
     Py_XDECREF(ptype);
     Py_XDECREF(pvalue);
     Py_XDECREF(ptraceback);
@@ -359,24 +351,64 @@ static int translate_python_exception(lua_State *L, PyGILState_STATE gstate) {
 
 void store_python_capsule(lua_State *L,
                           PyObject* val,
-                          long cycle_key,
                           int should_cache,
                           int recursive,
                           int raw_lua_args) {
-    // our caller already added us to cycles so we don't have to worry about
-    // it here
     lua_capsule* capsule =
         (lua_capsule*)lua_newuserdata(L, sizeof(lua_capsule));
 
-    // we don't hold the GIL so we can't do anything but store pointers. note
-    // that we explicitly are not refcounting here: we rely on `cycles` to keep
-    // us live
     capsule->val = val;
-    capsule->cycle_key = cycle_key;
     capsule->cache_ref = LUA_REFNIL; // cache is populated lazily
     capsule->cache = should_cache;
     capsule->recursive = recursive;
     capsule->raw_lua_args = raw_lua_args;
+
+    // assign the metatable of the userdata to get the methods
+    lua_getfield(L, LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY);
+    lua_setmetatable(L, -2);
+
+    // we don't do explicit refcounting. instead we rely on our references dict
+    // to keep us live and free_python_capsule cleans it up. See
+    // executor.py:Lua.__init__ for details
+    lua_control_block *control = NULL;
+    (void*)lua_getallocf(L, (void*)&control);
+    PyObject* references = control->references;
+
+    // from here on out we must escape through error below
+    // this is all equivalent to references.setdefault(id(val), []).append(val)
+
+    // this is how cpython derives the builtin `id` function
+    // https://github.com/python/cpython/blob/29500737d45cbca9604d9ce845fb2acc3f531401/Python/bltinmodule.c#L1207
+    PyObject* cycle_key = PyLong_FromVoidPtr(val);
+    PyObject* list = NULL;
+
+    if(cycle_key == NULL) {
+        goto error;
+    }
+
+    list = PyDict_GetItem(references, cycle_key);
+    // list is now a borrowed reference or NULL
+    if(list == NULL) {
+        list = PyList_New(1); // now we own list
+        if(list == NULL) {
+            // couldn't allocate
+            goto error;
+        }
+        if(PyDict_SetItem(references, cycle_key, list) == -1) {
+            goto error;
+        }
+    } else {
+        Py_INCREF(list); // so we own it and can free it later
+    }
+    // now there's a list we can append to
+    if(PyList_Append(list, val) == -1) {
+        goto error;
+    }
+
+error:
+    Py_XDECREF(cycle_key);
+    Py_XDECREF(list);
+    // we never owned val
 }
 
 
@@ -386,8 +418,13 @@ int free_python_capsule(lua_State *L) {
     // can longjmp out
     luaL_argcheck(L, capsule != NULL, 1, "python capsule expected");
 
-    PyObject* cycles = lua_touserdata(L, lua_upvalueindex(1));
-    luaL_argcheck(L, cycles != NULL, -1, "upvalue missing?");
+    // the upvalue for this function, installed in
+    // executor.py:Lua.install_python_capsule (which sets up the capsule
+    // metatable). Note that even though references is available on the control
+    // block, we may be called after the control block has been freed so we get
+    // our own separate copy
+    PyObject* references = lua_touserdata(L, lua_upvalueindex(1));
+    luaL_argcheck(L, references != NULL, -1, "upvalue missing?");
 
     // clean up the cache
     if(capsule->cache_ref != LUA_REFNIL) {
@@ -401,16 +438,18 @@ int free_python_capsule(lua_State *L) {
 
     PyObject *list=NULL, *key=NULL, *popped=NULL;
 
-    key = PyLong_FromLong(capsule->cycle_key);
+    // this is how cpython derives the builtin `id` function
+    key = PyLong_FromVoidPtr(capsule->val);
     if(key == NULL) {
         PyErr_WarnEx(NULL, "free_python_capsule couldn't make key", 0);
         PyErr_Print(); // we can't really raise exceptions here
         goto error;
     }
 
-    list = PyDict_GetItem(cycles, key);
+    list = PyDict_GetItem(references, key);
 
-    // we can't really raise exceptions here
+    // we can't really raise exceptions here. if one of these is happening
+    // we're probably leaking memory
     if(list == NULL) {
         PyErr_WarnEx(NULL, "free_python_capsule dangling reference (not found)", 0);
         goto error;
@@ -432,7 +471,7 @@ int free_python_capsule(lua_State *L) {
 
     if(PyList_GET_SIZE(list)==0) {
         // we emptied it out, so remove the entry entirely
-        int del_ret = PyDict_DelItem(cycles, key);
+        int del_ret = PyDict_DelItem(references, key);
         if(del_ret==-1) {
             PyErr_WarnEx(NULL, "free_python_capsule couldn't delitem", 0);
             PyErr_Print(); // we can't really raise exceptions here
@@ -465,10 +504,10 @@ int lazy_capsule_index(lua_State *L) {
     luaL_argcheck(L, capsule != NULL, 1, "python capsule expected"); // can longjmp out
 
     PyObject* index_proxy = lua_touserdata(L, lua_upvalueindex(1));
-    luaL_argcheck(L, index_proxy != NULL, -1, "upvalue missing?");
+    luaL_argcheck(L, index_proxy != NULL, -1, "upvalue missing?"); // can longjmp out
 
     PyObject* executor = lua_touserdata(L, lua_upvalueindex(2));
-    luaL_argcheck(L, executor != NULL, -1, "upvalue missing?");
+    luaL_argcheck(L, executor != NULL, -1, "upvalue missing?"); // can longjmp out
 
     // upvalue[1] points to the Python proxy function for extracting the key,
     // args[-2] points to the capsule struct, and args[-1] is the index to the
@@ -510,8 +549,8 @@ int lazy_capsule_index(lua_State *L) {
 
     // stack is [key, value]
 
-    /// now we have the result at the top of the stack, we can put it in / the
-    //cache for next time
+    // now we have the result at the top of the stack, we can put it in the
+    // cache for next time
     if(capsule->cache) {
         int value_idx = lua_gettop(L);
         set_capsule_cache(L, capsule, key_idx, value_idx);

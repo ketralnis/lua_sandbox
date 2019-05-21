@@ -28,8 +28,11 @@ test: ${INSTALLEDENV}
 leaktest: ${INSTALLEDENV} test
 	LEAKTEST=true .env/bin/python -m lua_sandbox.tests.tests ${TEST} > /dev/null 2>&1
 
-gtest: ${INSTALLEDENV}
+lldbtest: ${INSTALLEDENV}
 	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}
+
+gdbtest: ${INSTALLEDENV}
+	gdb -ex=r --args .env/bin/python -m lua_sandbox.tests.tests ${TEST}
 
 clean:
 	find lua_sandbox -type f -name \*.pyc -delete -print

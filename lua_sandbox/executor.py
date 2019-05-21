@@ -236,7 +236,7 @@ MAX_RUNTIME_DEFAULT = 2.0 # (in seconds)
 MAX_RUNTIME_HZ_DEFAULT = 500*1000 # how often to check (in "lua instructions")
 
 class Lua(object):
-    __slots__ = ['L', 'max_memory', 'cleanup_cache', 'name', 'cycles']
+    __slots__ = ['L', 'max_memory', 'cleanup_cache', 'name', 'references']
 
     def __init__(self, max_memory=MAX_MEMORY_DEFAULT, name=None):
         self.name = name or "%s[%s]" % (self.__class__.__name__, id(self))
@@ -255,12 +255,13 @@ class Lua(object):
         # something that more closely resembles the actual object graph. lupa
         # uses the same technique
         # https://github.com/scoder/lupa/commit/c634e44d77a17adcf99a562284da76a5a40065a4
-        self.cycles = {}
+        self.references = {}
 
         self.L = luaL_newstate()
         self.L = ctypes.c_void_p(self.L)  # save us casts later
 
-        if not install_control_block(self.L, ctypes.c_size_t(max_memory)):
+        if not install_control_block(self.L, ctypes.c_size_t(max_memory),
+                                     ctypes.py_object(self.references)):
             raise LuaOutOfMemoryException("couldn't allocate control block")
 
         luaL_openlibs(self.L)
@@ -294,8 +295,10 @@ class Lua(object):
         # methods
         luaL_newmetatable(self.L, EXECUTOR_LUA_CAPSULE_KEY)
 
-        # we need to be able to dealloc them
-        lua_pushlightuserdata(self.L, ctypes.py_object(self.cycles))
+        # we need to be able to dealloc them. even though references is
+        # available in the control block, free_python_capsule may run *after*
+        # the control block isn't available anymore so it'll need his own copy
+        lua_pushlightuserdata(self.L, ctypes.py_object(self.references))
         lua_pushcclosure(self.L, free_python_capsule, 1)
         lua_setfield(self.L, -2, '__gc')
 
@@ -391,7 +394,7 @@ class Lua(object):
 class LuaValue(object):
     __slots__ = ['executor', 'L', 'key', 'cleanup_cache']
 
-    def __init__(self, executor, cycle_id=None):
+    def __init__(self, executor):
         """
         Build a LuaValue off of whatever's on the top of the stack, then pop it
         off. We store it in Lua's global
@@ -403,10 +406,10 @@ class LuaValue(object):
         # the one that keeps the lua_State* live
         self.executor = executor
         self.L = executor.L
-        self._create(cycle_id)
+        self._create()
 
     @check_stack(2, -1)
-    def _create(self, cycle_id):
+    def _create(self):
         # right now the top of the stack contains the item that we're storing
 
         # pops it off and stores the integer reference in the registry
@@ -421,22 +424,18 @@ class LuaValue(object):
             LUA_REGISTRYINDEX=_executor.LUA_REGISTRYINDEX,
         )
 
-        if cycle_id is not None:
-            id_, val = cycle_id
-            # added here, removed in _executormodule.c:free_python_capsule
-            self.executor.cycles.setdefault(id_, []).append(val)
-
     def __del__(self):
         self.cleanup_cache['luaL_unref'](self.L,
             self.cleanup_cache['LUA_REGISTRYINDEX'],
             self.key)
 
     @check_stack()
-    def type_name(self):
+    def type(self):
         with self._bring_to_top():
-            # extract the value
-            name = lua_typename(self.L, lua_type(self.L, -1))
+            return lua_type(self.L, -1)
 
+    def type_name(self):
+        name = lua_typename(self.L, self.type())
         return name
 
     @contextlib.contextmanager
@@ -506,7 +505,7 @@ class LuaValue(object):
         elif kind == _executor.LUA_TFUNCTION:
             return self # we're already callable
 
-        elif kind == _executor.LUA_TUSERDATA and self.is_capsule(idx):
+        elif kind == _executor.LUA_TUSERDATA and self._is_capsule(idx):
             ptr_v = ctypes.c_void_p(lua_touserdata(self.L, -1))
             ptr_py = decapsule(ptr_v)
             return ptr_py
@@ -514,8 +513,12 @@ class LuaValue(object):
         else:
             raise LuaException("can't coerce %s" % self.type_name())
 
+    def is_capsule(self):
+        with self._bring_to_top():
+            return self._is_capsule(-1)
+
     @check_stack(2, 0)
-    def is_capsule(self, idx):
+    def _is_capsule(self, idx):
         idx = abs_index(self.L, idx)
 
         if not lua_getmetatable(self.L, idx):
@@ -593,7 +596,7 @@ class LuaValue(object):
             raise LuaOutOfMemoryException("%.2fmb > %.2fmb (%dc)"
                                           % (self.executor.memory_used/1024.0/1024.0,
                                              self.executor.max_memory/1024.0/1024.0,
-                                             len(self.executor.cycles)))
+                                             len(self.executor.references)))
 
         else:
             raise LuaException("Unknown return value from lua_pcallk: %r"
@@ -764,7 +767,6 @@ class LuaValue(object):
 
         elif callable(val) or isinstance(val, Capsule):
             lval = val.inner if isinstance(val, Capsule) else val
-            val_id = id(lval)
 
             should_cache = recursive = raw_lua_args = 0
 
@@ -780,18 +782,12 @@ class LuaValue(object):
             # the stack)
             store_python_capsule(self.L,
                                  ctypes.py_object(lval),
-                                 ctypes.c_long(val_id),
                                  should_cache,
                                  recursive,
                                  raw_lua_args)
 
-            # assign the metatable of the userdata to get the methods
-            lua_getfield(self.L, _executor.LUA_REGISTRYINDEX, EXECUTOR_LUA_CAPSULE_KEY)
-            lua_setmetatable(self.L, -2)
-
-            # consume the userdata with the metatable set
-            return LuaValue(executor,
-                            cycle_id=(val_id, lval))
+            # consume the userdata (now with the metatable set)
+            return LuaValue(executor)
 
         raise TypeError("Can't serialise %r. Do you need a capsule?" % (val,))
 
@@ -880,7 +876,11 @@ class Capsule(object):
 
 
 class LuaException(Exception):
-    pass
+    def __str__(self):
+        return "%s(%s)" % (self.__class__.__name__, self.message)
+
+    def __repr__(self):
+        return str(self)
 
 
 class LuaInvariantException(LuaException):
@@ -894,19 +894,23 @@ class LuaOutOfMemoryException(LuaException):
 class LuaStateException(LuaException):
     def __init__(self, executor):
         # there's currently an error on the top of the Lua stack so extract
-        # it, turn it into a Python exception, and raise it. Here we don't
-        # return the LuaValue version because it's very possible that we're
-        # throwing away the L now and don't need to hold on it anymore
-        err_string_len = ctypes.c_size_t(0)
-        err_string = lua_tolstring(executor.L, -1, ctypes.byref(err_string_len))
+        # it, turn it into a Python exception, and raise it.
 
-        # since that's a ptr into Lua state we need to copy it out
-        err_string_str = ctypes.string_at(err_string, err_string_len.value)
+        self.lua_value = lua_value = LuaValue(executor)
+        typ = lua_value.type()
+        # pretty-print if it's easy
+        if typ in (
+                _executor.LUA_TNUMBER,
+                _executor.LUA_TNIL,
+                _executor.LUA_TBOOLEAN,
+                _executor.LUA_TSTRING):
+            message = repr(lua_value.to_python())
+        elif typ == _executor.LUA_TUSERDATA and lua_value.is_capsule():
+            message = repr(lua_value.to_python())
+        else:
+            message = repr(lua_value)
 
-        # and consume it
-        lua_pop(executor.L, 1)
-
-        return super(LuaStateException, self).__init__(err_string_str)
+        return super(LuaStateException, self).__init__(message)
 
 
 class LuaSyntaxError(LuaStateException):

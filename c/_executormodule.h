@@ -33,7 +33,6 @@ typedef struct {
 
 typedef struct {
     PyObject* val;
-    long cycle_key;
     int cache_ref;
     int cache;
     int recursive;
@@ -43,6 +42,7 @@ typedef struct {
 typedef struct {
     memory_limiter memory;
     runtime_limiter runtime;
+    PyObject* references;
 #if LUA_VERSION_NUM == 501
     jmp_buf* panic_return;
 #endif
@@ -50,7 +50,8 @@ typedef struct {
 
 PyMODINIT_FUNC init_executor(void);
 
-int install_control_block(lua_State *L, size_t max_memory);
+int install_control_block(lua_State *L, size_t max_memory,
+                          PyObject* references);
 void wrapped_lua_close(lua_State*);
 void start_runtime_limiter(lua_State*, double max_runtime, int hz);
 void finish_runtime_limiter(lua_State*);
@@ -60,7 +61,7 @@ size_t get_memory_used(lua_State *L);
 void enable_limit_memory(lua_State *L);
 void disable_limit_memory(lua_State *L);
 int call_python_function_from_lua(lua_State *L);
-void store_python_capsule(lua_State*,PyObject*,long,int,int,int);
+void store_python_capsule(lua_State*,PyObject*,int,int,int);
 int free_python_capsule(lua_State *L);
 PyObject* decapsule(lua_capsule* capsule);
 int lazy_capsule_index(lua_State*);

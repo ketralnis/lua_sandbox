@@ -380,11 +380,12 @@ void store_python_capsule(lua_State *L,
     // this is how cpython derives the builtin `id` function
     // https://github.com/python/cpython/blob/29500737d45cbca9604d9ce845fb2acc3f531401/Python/bltinmodule.c#L1207
     PyObject* cycle_key = PyLong_FromVoidPtr(val);
+    PyObject* list = NULL;
+
     if(cycle_key == NULL) {
         goto error;
     }
 
-    PyObject* list = NULL;
     list = PyDict_GetItem(references, cycle_key);
     // list is now a borrowed reference or NULL
     if(list == NULL) {

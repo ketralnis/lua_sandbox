@@ -610,6 +610,20 @@ static void create_capsule_cache(lua_State* L, lua_capsule* capsule) {
 }
 
 
+PyObject* lua_string_to_python_buffer(lua_State* L, int idx) {
+    // our caller already checked that it's a string.  we insist that it's
+    // actually a string because (1) otherwise wanting a buffer into it doesn't
+    // make sense and (2) lua_tolstring will *convert* it into a string,
+    // destructively
+    size_t size = 0;
+    void* ptr = lua_tolstring(L, idx, &size);
+    PyObject* buff = PyBuffer_FromMemory(ptr, size); // new reference
+    // return that reference. it's up to our caller to free it, and to *not*
+    // keep a reference to it after the string is no longer on the stack
+    return buff;
+}
+
+
 static int add_int_constant(PyObject* module, char* name, int value) {
     PyObject *as_int = PyInt_FromLong(value);
     if(as_int == NULL) {

@@ -131,6 +131,8 @@ decapsule = executor_lib.decapsule
 decapsule.restype = ctypes.py_object
 lazy_capsule_index = executor_lib.lazy_capsule_index
 lazy_capsule_index.restype = ctypes.c_int
+lua_string_to_python_buffer = executor_lib.lua_string_to_python_buffer
+lua_string_to_python_buffer.restype = ctypes.py_object
 
 # function types
 lua_CFunction = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
@@ -808,15 +810,12 @@ class LuaValue(object):
         with self._bring_to_top():
             kind = lua_type(self.L, -1)
             if kind != _executor.LUA_TSTRING:
-                raise TypeError("as_buffer only works on strings!")
-
-            size = ctypes.c_size_t(0)
-            ptr = lua_tolstring(self.L, -1, ctypes.byref(size))
-            # size-1 because Lua includes room for a null byte but we don't
-            # need it
-            cls = (ctypes.c_char * size.value)
-            buff = cls.from_address(ptr)
-            yield buff
+                raise TypeError("as_buffer only works on strings, not %s!"
+                                % lua_typename(self.L, kind))
+            buff_obj = lua_string_to_python_buffer(self.L, -1)
+            yield buff_obj
+            # buff_obj gets dereferenced now
+        # value is no longer on the stack
 
 
 def _callable_wrapper(executor, val, raw_lua_args=False):

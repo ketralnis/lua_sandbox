@@ -64,6 +64,7 @@ void store_python_capsule(lua_State*,PyObject*,long,int,int,int);
 int free_python_capsule(lua_State *L);
 PyObject* decapsule(lua_capsule* capsule);
 int lazy_capsule_index(lua_State*);
+PyObject* lua_string_to_python_buffer(lua_State*, int idx);
 static int check_capsule_cache(lua_State* L, lua_capsule*, int);
 static void set_capsule_cache(lua_State* L, lua_capsule*, int, int);
 static void create_capsule_cache(lua_State* L, lua_capsule*);

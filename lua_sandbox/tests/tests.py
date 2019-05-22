@@ -347,11 +347,13 @@ class TestLuaExecution(unittest.TestCase):
     def test_buffer_interface(self):
         # we can get a buffer into a Lua string and, and re.search works on
         # that buffer
-        loaded = self.ex.lua.load(""" return "this is my string" """)
+        s = b""" return "this is my string" """
+        loaded = self.ex.lua.load(s)
         lua_string, = loaded()
         with lua_string.as_buffer() as buff:
-            self.assertEqual(re.search('my (string)', buff).groups(),
+            self.assertEqual(re.search('my (string.*)', buff).groups(),
                              ('string',))
+            self.assertEqual(len(buff), len('this is my string'))
 
         # this is the regular callback way with lots of copies, here mostly for
         # demonstration

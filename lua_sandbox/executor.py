@@ -906,7 +906,9 @@ class LuaStateException(LuaException):
                 _executor.LUA_TSTRING):
             message = repr(lua_value.to_python())
         elif typ == _executor.LUA_TUSERDATA and lua_value.is_capsule():
-            message = repr(lua_value.to_python())
+            python_value = lua_value.to_python()
+            message = repr(python_value)
+            self.__cause__ = python_value
         else:
             message = repr(lua_value)
 

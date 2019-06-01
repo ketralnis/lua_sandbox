@@ -338,6 +338,7 @@ class TestLuaExecution(unittest.TestCase):
             self.ex.execute(program, {'foo': bad_closure})
         except LuaException as e:
             self.assertIsInstance(e.lua_value.to_python(), MyException)
+            self.assertIsInstance(e.__cause__, MyException)
         else:
             self.assertTrue(False)
 

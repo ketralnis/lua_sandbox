@@ -40,9 +40,13 @@ _executor = Extension('lua_sandbox._executor',
                       extra_link_args=EXTRA_LINK_ARGS,
                       )
 
+PACKAGE_NAME = 'lua_sandbox'
+if 'jit' in LUA_LIB_NAME:
+    PACKAGE_NAME += '_luajit'
+
 setup(
-    name='lua_sandbox',
-    version='2.1.6',
+    name=PACKAGE_NAME,
+    version='2.1.7',
     description='A library to run lua code inside of a sandbox from Python',
     author='David King',
     author_email='dking@ketralnis.com',

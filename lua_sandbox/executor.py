@@ -154,10 +154,6 @@ def lua_isnil(L, idx):
     return lua_type(L, idx) == _executor.LUA_TNIL
 
 
-def luaL_typename(L, idx):
-    return lua_typename(L, lua_type(L, idx))
-
-
 if _executor.LUA_VERSION_NUM == 501:
     lua_pcallk = executor_lib_nogil.memory_safe_pcallk
 

@@ -13,20 +13,25 @@ ${INSTALLEDENV}: setup.py
 	make check_dependencies
 	rm -fr .env
 	virtualenv .env
+	.env/bin/pip install setuptools --upgrade
 	make rebuild
 
 sdist: ${INSTALLEDENV}
 	.env/bin/python ./setup.py sdist
+
+bdist: ${INSTALLEDENV}
+	.env/bin/python ./setup.py bdist
 
 rebuild:
 	.env/bin/python ./setup.py develop
 	touch ${INSTALLEDENV}
 
 test: ${INSTALLEDENV}
-	.env/bin/python -m lua_sandbox.tests.tests ${TEST}
+	.env/bin/python ./setup.py test
 
 leaktest: ${INSTALLEDENV} test
-	LEAKTEST=true .env/bin/python -m lua_sandbox.tests.tests ${TEST} > /dev/null 2>&1
+	.env/bin/pip install pympler
+	LEAKTEST=true .env/bin/python -m lua_sandbox.tests.tests ${TEST} # > /dev/null 2>&1
 
 lldbtest: ${INSTALLEDENV}
 	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}

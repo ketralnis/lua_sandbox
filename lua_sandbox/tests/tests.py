@@ -35,6 +35,12 @@ def skip_if_luajit(fn):
     return fn
 
 
+def only_on_luajit(fn):
+    if _executor.LUA_VERSION_NUM != 501:
+        return unittest.skip("only supported on luajit")(fn)
+    return fn
+
+
 class TestLuaExecution(unittest.TestCase):
     def setUp(self, *a, **kw):
         self.ex = SimpleSandboxedExecutor(name=self.id(),
@@ -470,7 +476,7 @@ class TestSafeguards(TestLuaExecution):
         def _tester(program):
             start_time = time.time()
             with self.assertRaises(LuaException):
-                with self.ex.lua.limit_runtime(0.5):
+                with self.ex.lua.limit_runtime(0.5, disable_jit=True):
                     self.ex.execute(program)
             self.assertLess(time.time()-start_time, 0.7)
 
@@ -481,7 +487,7 @@ class TestSafeguards(TestLuaExecution):
             return 1
         """)
 
-        with self.ex.lua.limit_runtime(1.0):
+        with self.ex.lua.limit_runtime(1.0, disable_jit=True):
             # make sure the limiter doesn't just always trigger
             self.ex.execute("return 5")
 
@@ -516,6 +522,23 @@ class TestSafeguards(TestLuaExecution):
             return foo
         """
         self.ex.execute(program, {'foo': 0})
+
+    @skip_if_luajit
+    def test_luajit_not_present(self):
+        lua = self.ex.lua
+        self.assertEqual(lua.jit_mode(), None)
+
+    @only_on_luajit
+    def test_luajit_present(self):
+        lua = self.ex.lua
+        self.assertNotEqual(lua.jit_mode(), None)
+
+    @only_on_luajit
+    def test_luajit_mode(self):
+        lua = self.ex.lua
+        lua.jit_mode().compiler_mode(True)
+        lua.jit_mode().compiler_mode(False)
+        lua.jit_mode().flush_compiler()
 
 
 class TestReusingExecutor(TestLuaExecution):

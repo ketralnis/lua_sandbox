@@ -178,6 +178,8 @@ elif _executor.LUA_VERSION_NUM in (502, 503):
     lua_setglobal = lua_lib.lua_setglobal
     lua_setglobal.restype = None
 
+    luaJIT_setmode = None
+
 else:
     raise ImportError("I don't know LUA_VERSION_NUM %r", _executor.LUA_VERSION_NUM)
 
@@ -278,7 +280,12 @@ class Lua(object):
     @contextlib.contextmanager
     def limit_runtime(self,
                       max_runtime=MAX_RUNTIME_DEFAULT,
-                      max_runtime_hz=MAX_RUNTIME_HZ_DEFAULT):
+                      max_runtime_hz=MAX_RUNTIME_HZ_DEFAULT,
+                      disable_jit=False):
+
+        jit_mode = disable_jit and self.jit_mode()
+        if jit_mode:
+            jit_mode.compiler_mode(False)
 
         start_runtime_limiter(self.L,
                               ctypes.c_double(max_runtime),
@@ -288,6 +295,10 @@ class Lua(object):
             yield
         finally:
             finish_runtime_limiter(self.L)
+            if jit_mode:
+                # there 's no way to query the old state, so we just always
+                # turn it on
+                jit_mode.compiler_mode(True)
 
     @check_stack(3, 0)
     def install_python_capsule(self):
@@ -385,6 +396,10 @@ class Lua(object):
     def create_table(self):
         lua_createtable(self.L, 0, 0)
         return LuaValue(self)
+
+    def jit_mode(self):
+        if luaJIT_setmode:
+            return LuaJitMode(self)
 
     def __del__(self):
         if self.L:
@@ -980,3 +995,24 @@ class SandboxedExecutor(object):
                     raise LuaException("couldn't set upvalue?")
 
         return loaded
+
+
+class LuaJitMode(object):
+    def __init__(self, executor):
+        self.executor = executor
+
+    @property
+    def L(self):
+        return self.executor.L
+
+    def compiler_mode(self, enabled):
+        if enabled:
+            flag = _executor.LUAJIT_MODE_ON
+        else:
+            flag = _executor.LUAJIT_MODE_OFF
+        luaJIT_setmode(self.L, 0, _executor.LUAJIT_MODE_ENGINE | flag)
+
+    def flush_compiler(self):
+        luaJIT_setmode(
+            self.L, 0,
+            _executor.LUAJIT_MODE_ENGINE | _executor.LUAJIT_MODE_FLUSH)

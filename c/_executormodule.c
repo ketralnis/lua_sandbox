@@ -97,13 +97,6 @@ void start_runtime_limiter(lua_State *L, double max_runtime, int hz) {
         (clock_t)(now+(double)max_runtime*(double)CLOCKS_PER_SEC);
 
     lua_sethook(L, time_limiting_hook, LUA_MASKCOUNT, hz);
-
-#if LUA_VERSION_NUM == 501
-    // in order for that to apply to compiled code we have to turn off the
-    // compiler :( there's still some win because luajit's interpreter is
-    // still faster than canonical Lua's
-    luaJIT_setmode(L, 0, LUAJIT_MODE_ENGINE|LUAJIT_MODE_OFF);
-#endif
 }
 
 
@@ -116,12 +109,6 @@ void finish_runtime_limiter(lua_State *L) {
     }
 
     lua_sethook(L, NULL, 0, 0);
-
-#if LUA_VERSION_NUM == 501
-    // can turn this back on now. note that there's no luaJIT_getmode so we
-    // can't know if it was turned on before
-    luaJIT_setmode(L, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON);
-#endif
 
     (control->runtime).enabled = 0;
 }

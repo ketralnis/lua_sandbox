@@ -34,4 +34,5 @@ The result is 210.0
 
 # luajit support notes
 
-lua_sandbox supports luajit 2.0 with some limitations. Runtime limiting can be defeated in some cases (e.g. if a chunk with problematic code is run without the limiter and then again under it). Additionally, the JIT compiler is turned off when running runtime limited code.
+lua_sandbox supports luajit 2.0 with the limitation that runtime limiting is
+not enforceable

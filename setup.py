@@ -46,7 +46,7 @@ if 'jit' in LUA_LIB_NAME:
 
 setup(
     name=PACKAGE_NAME,
-    version='2.1.8',
+    version='2.1.9',
     description='A library to run lua code inside of a sandbox from Python',
     author='David King',
     author_email='dking@ketralnis.com',

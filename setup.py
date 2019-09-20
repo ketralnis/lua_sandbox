@@ -1,11 +1,9 @@
-#!/usr/bin/env python2.7
-
 import sys
 import os
 import json
 import platform
 
-from setuptools import setup, find_packages, Extension
+from distutils.core import setup, Extension
 
 build_config = {}
 
@@ -28,7 +26,7 @@ if 'jit' in LUA_LIB_NAME and platform.system() == 'Darwin':
     EXTRA_LINK_ARGS += ["-pagezero_size 10000", "-image_base 100000000"]
 
 _executor = Extension('lua_sandbox._executor',
-                      define_macros=[('MAJOR_VERSION', '2'),
+                      define_macros=[('MAJOR_VERSION', '3'),
                                      ('MINOR_VERSION', '0'),
                                      ('LUA_LIB_NAME', '"%s"'%LUA_LIB_NAME)
                                      ],
@@ -46,17 +44,15 @@ if 'jit' in LUA_LIB_NAME:
 
 setup(
     name=PACKAGE_NAME,
-    version='2.1.9',
+    version='3.0',
     description='A library to run lua code inside of a sandbox from Python',
     author='David King',
     author_email='dking@ketralnis.com',
     url='https://github.com/ketralnis/lua_sandbox',
     ext_modules=[_executor],
-    packages=find_packages(),
-    package_data={'lua_sandbox': ['lua_sandbox/lua_utils/*.lua']},
-    zip_safe=False,
-    include_package_data=True,
-    install_requires=[
-        ""
-    ],
+    packages=['lua_sandbox', 'lua_sandbox.tests'],
+    package_dir={'':'src'},
+    package_data={
+        "lua_sandbox": ["lua_utils/*.lua"],
+    },
 )

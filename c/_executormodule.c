@@ -642,8 +642,9 @@ PyObject* lua_string_to_python_buffer(lua_State* L, int idx) {
     // make sense and (2) lua_tolstring will *convert* it into a string,
     // destructively
     size_t size = 0;
-    void* ptr = lua_tolstring(L, idx, &size);
-    PyObject* buff = PyBuffer_FromMemory(ptr, size); // new reference
+    const char* ptr = lua_tolstring(L, idx, &size);
+    // new reference
+    PyObject* buff = PyMemoryView_FromMemory((void*)ptr, size, PyBUF_READ);
     // return that reference. it's up to our caller to free it, and to *not*
     // keep a reference to it after the string is no longer on the stack
     return buff;
@@ -651,7 +652,7 @@ PyObject* lua_string_to_python_buffer(lua_State* L, int idx) {
 
 
 static int add_int_constant(PyObject* module, char* name, int value) {
-    PyObject *as_int = PyInt_FromLong(value);
+    PyObject *as_int = PyLong_FromLong(value);
     if(as_int == NULL) {
         return -1;
     }
@@ -665,7 +666,7 @@ static int add_int_constant(PyObject* module, char* name, int value) {
 
 
 static int add_str_constant(PyObject* module, char* name, char* value) {
-    PyObject *as_str = PyString_FromString(value);
+    PyObject *as_str = PyUnicode_FromString(value);
     if(as_str == NULL) {
         return -1;
     }
@@ -678,17 +679,24 @@ static int add_str_constant(PyObject* module, char* name, char* value) {
 }
 
 
-PyMODINIT_FUNC init_executor(void) {
+PyMODINIT_FUNC PyInit__executor(void) {
     // initialise the module
 
-    PyObject* module = NULL;
+    static PyModuleDef mod = {
+        PyModuleDef_HEAD_INIT,
+        "_executor",         /* m_name */
+        "C internals",       /* m_doc */
+        -1,                  /* m_size */
+        NULL,                /* m_methods */
+        NULL,                /* m_reload */
+        NULL,                /* m_traverse */
+        NULL,                /* m_clear */
+        NULL};               /* m_free */
 
-    module = Py_InitModule3("lua_sandbox._executor",
-        NULL, /* no functions of our own */
-        "C portion that implements the Lua-Python bridge");
+    PyObject* module = PyModule_Create(&mod);
     if (module == NULL) {
         /* exception raised in preparing */
-        return;
+        return NULL;
     }
 
     /*
@@ -777,10 +785,10 @@ PyMODINIT_FUNC init_executor(void) {
                         EXECUTOR_XSTR(LUA_NUMBER))==-1)
         goto error;
 
-    return;
+    return module;
 
 error:
     Py_XDECREF(module);
 
-    return;
+    return NULL;
 }

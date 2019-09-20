@@ -3,6 +3,7 @@ all:
 	false
 
 INSTALLEDENV=.env/installed
+PYTHON=.env/bin/python
 
 installenv: ${INSTALLEDENV}
 
@@ -12,30 +13,31 @@ check_dependencies:
 ${INSTALLEDENV}: setup.py
 	make check_dependencies
 	rm -fr .env
-	virtualenv .env
+	virtualenv --python=python3.7 .env
 	make rebuild
 
 sdist: ${INSTALLEDENV}
-	.env/bin/python ./setup.py sdist
+	${PYTHON} ./setup.py sdist
 
 rebuild:
-	.env/bin/python ./setup.py develop
+	${PYTHON} ./setup.py install
+	.env/bin/pip install -r requirements.txt
 	touch ${INSTALLEDENV}
 
 test: ${INSTALLEDENV}
-	.env/bin/python -m lua_sandbox.tests.tests ${TEST}
+	${PYTHON} -m lua_sandbox.tests.tests ${TEST}
 
 leaktest: ${INSTALLEDENV} test
-	LEAKTEST=true .env/bin/python -m lua_sandbox.tests.tests ${TEST} > /dev/null 2>&1
+	LEAKTEST=true ${PYTHON} -m lua_sandbox.tests.tests ${TEST} > /dev/null 2>&1
 
 lldbtest: ${INSTALLEDENV}
-	lldb -f .env/bin/python -- -m lua_sandbox.tests.tests ${TEST}
+	lldb -f ${PYTHON} -- -m lua_sandbox.tests.tests ${TEST}
 
 gdbtest: ${INSTALLEDENV}
-	gdb -ex=r --args .env/bin/python -m lua_sandbox.tests.tests ${TEST}
+	gdb -ex=r --args ${PYTHON} -m lua_sandbox.tests.tests ${TEST}
 
 clean:
-	find lua_sandbox -type f -name \*.pyc -delete -print
+	find src \( -name \*.pyc -o -name __pycache__ \) -delete -print
 
 distclean: clean
 	rm -rf build

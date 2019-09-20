@@ -15,7 +15,7 @@ if not lua_lib_location or not lua_lib.lua_newstate:
     raise ImportError("unable to locate lua (%r)" % _executor.LUA_LIB_NAME)
 
 # we talk to executor in two ways: as a Python module and as a ctypes module
-executor_lib_location = dataloc('_executor.so')
+executor_lib_location = _executor.__file__
 executor_lib = ctypes.PyDLL(executor_lib_location)
 executor_lib_nogil = ctypes.CDLL(executor_lib_location)
 
@@ -28,7 +28,7 @@ elif _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME == 'float':
     lua_number_type = ctypes.c_float
 else:
     raise ImportError("Unable to deal with lua configured with LUA_NUMBER=%s"
-                    % _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME)
+                      % _executor.EXECUTOR_LUA_NUMBER_TYPE_NAME)
 
 # dylib exports
 luaL_loadbufferx = lua_lib.luaL_loadbufferx
@@ -201,6 +201,7 @@ def check_stack(needs=0, expected=0):
         @wraps(fn)
         def wrapped(self, *a, **kw):
             if needs and not lua_checkstack(self.L, needs):
+                # TODO should this be bytes?
                 raise LuaOutOfMemoryException("%r.checkstack" % (fn,))
 
             oom = False
@@ -237,11 +238,12 @@ MAX_MEMORY_DEFAULT = 2*1024*1024
 MAX_RUNTIME_DEFAULT = 2.0 # (in seconds)
 MAX_RUNTIME_HZ_DEFAULT = 500*1000 # how often to check (in "lua instructions")
 
-class Lua(object):
+class Lua:
     __slots__ = ['L', 'max_memory', 'cleanup_cache', 'name', 'references']
 
     def __init__(self, max_memory=MAX_MEMORY_DEFAULT, name=None):
-        self.name = name or "%s[%s]" % (self.__class__.__name__, id(self))
+        self.name = name or (
+            "%s[%s]" % (self.__class__.__name__, id(self))).encode('ascii')
 
         self.max_memory = max_memory = max_memory or 0
 
@@ -296,8 +298,8 @@ class Lua(object):
         finally:
             finish_runtime_limiter(self.L)
             if jit_mode:
-                # there 's no way to query the old state, so we just always
-                # turn it on
+                # there's no way to query the old state, so we just always turn
+                # it on :(
                 jit_mode.compiler_mode(True)
 
     @check_stack(3, 0)
@@ -344,8 +346,8 @@ class Lua(object):
 
     @check_stack(1, 0)
     def set_global(self, key, value):
-        if not isinstance(key, str):
-            raise TypeError("key must be str, not %r" % (key,))
+        if not isinstance(key, bytes): # hmmmmmmm
+            raise TypeError("key must be bytes, not %r" % (key,))
 
         lvalue = LuaValue.from_python(self, value)
         lvalue._bring_to_top(False)
@@ -359,8 +361,8 @@ class Lua(object):
 
     @check_stack(1, 0)
     def get_global(self, key):
-        if not isinstance(key, str):
-            raise TypeError("key must be str, not %r" % (key,))
+        if not isinstance(key, bytes):
+            raise TypeError("key must be bytes, not %r" % (key,))
 
         lua_getglobal(self.L, key)
         return LuaValue(self)
@@ -374,18 +376,21 @@ class Lua(object):
 
     @check_stack(1, 0)
     def load(self, code, desc=None, mode="t"):
-        assert isinstance(code, str)
-        assert isinstance(desc, (type(None), str))
+        assert isinstance(code, bytes), "expected bytes, not " + repr(code)
+        assert isinstance(desc, (type(None), bytes)), "expected bytes, not " + repr(desc)
+
+        desc = desc or self.__class__.__name__.encode('utf8')
 
         load_ret = luaL_loadbufferx(self.L,
                                     code,
                                     ctypes.c_size_t(len(code)),
-                                    desc or self.__class__.__name__,
+                                    desc,
                                     mode)
 
         if load_ret == _executor.LUA_OK:
             return LuaValue(self)
         elif load_ret == _executor.LUA_ERRSYNTAX:
+            print(repr(code))
             raise LuaSyntaxError(self)
         elif load_ret == _executor.LUA_ERRMEM:
             raise LuaOutOfMemoryException('load')
@@ -406,7 +411,7 @@ class Lua(object):
             self.cleanup_cache['wrapped_lua_close'](self.L)
 
 
-class LuaValue(object):
+class LuaValue:
     __slots__ = ['executor', 'L', 'key', 'cleanup_cache']
 
     def __init__(self, executor):
@@ -539,7 +544,7 @@ class LuaValue(object):
         if not lua_getmetatable(self.L, idx):
             return False
 
-        lua_pushstring(self.L, "capsule")
+        lua_pushstring(self.L, b"capsule")
         lua_rawget(self.L, -2)
         ret = not lua_isnil(self.L, -1)
 
@@ -571,7 +576,8 @@ class LuaValue(object):
         before_top = lua_gettop(self.L)
 
         try:
-            lua_args = map(lambda x: LuaValue.from_python(self.executor, x), args)
+            lua_args = list(
+                map(lambda x: LuaValue.from_python(self.executor, x), args))
         except Exception:
             # get ourselves off of the stack
             lua_pop(self.L, 1)
@@ -597,7 +603,7 @@ class LuaValue(object):
 
             rets = []
 
-            for _ in xrange(1+after_top-before_top):
+            for _ in range(1+after_top-before_top):
                 rets.append(LuaValue(self.executor))
 
             rets.reverse()
@@ -703,15 +709,15 @@ class LuaValue(object):
             lua_pushboolean(self.L, 1 if val else 0)
             return LuaValue(executor)
 
-        elif isinstance(val, (int, long, float)):
+        elif isinstance(val, (int, float)):
             lua_pushnumber(self.L, lua_number_type(val))
             return LuaValue(executor)
 
-        elif isinstance(val, str):
+        elif isinstance(val, bytes):
             lua_pushlstring(self.L, val, ctypes.c_size_t(len(val)))
             return LuaValue(executor)
 
-        elif isinstance(val, unicode):
+        elif isinstance(val, str):
             as_str = val.encode('utf8')
             return cls.from_python(executor, as_str,
                                    recursion=recursion+1,
@@ -727,7 +733,7 @@ class LuaValue(object):
         elif isinstance(val, dict):
             lua_createtable(self.L, 0, len(val))
 
-            for k, v in val.iteritems():
+            for k, v in val.items():
                 # this works but it creates a lot of overhead because it makes
                 # a lot of round trips through the registry table. we can
                 # probably make this faster by making this function more
@@ -835,7 +841,7 @@ def _callable_wrapper(executor, val, raw_lua_args=False):
 
     args = []
 
-    for _ in xrange(1, nargs):
+    for _ in range(1, nargs):
         if raw_lua_args:
             args.append(LuaValue(executor))
         else:
@@ -876,7 +882,7 @@ def _indexable_wrapper(executor, indexable, should_cache, recursive):
     return lv._bring_to_top(False)
 
 
-class Capsule(object):
+class Capsule:
     """
     A container for passing Python objects through Lua unmolested
     """
@@ -927,6 +933,7 @@ class LuaStateException(LuaException):
         else:
             message = repr(lua_value)
 
+        self.message = message
         return super(LuaStateException, self).__init__(message)
 
 
@@ -938,7 +945,7 @@ class LuaSyntaxError(LuaStateException):
 SANDBOXER = datafile("lua_utils/safe_sandbox.lua")
 
 
-class SandboxedExecutor(object):
+class SandboxedExecutor:
     def __init__(self,
                  name=None,
                  sandboxer=SANDBOXER,
@@ -950,7 +957,7 @@ class SandboxedExecutor(object):
 
         loaded_sandboxer = self.ex.load(
             sandboxer,
-            desc='%s.sandboxer' % self.ex.name)
+            desc=b'%s.sandboxer' % self.ex.name)
 
         self.sandbox = loaded_sandboxer()[0]
 
@@ -997,7 +1004,7 @@ class SandboxedExecutor(object):
         return loaded
 
 
-class LuaJitMode(object):
+class LuaJitMode:
     def __init__(self, executor):
         self.executor = executor
 

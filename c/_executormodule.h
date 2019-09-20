@@ -2,6 +2,7 @@
 #define _EXECUTOR_MODULE_H
 
 #include <time.h>
+#include <setjmp.h>
 
 #include <Python.h>
 
@@ -48,7 +49,7 @@ typedef struct {
 #endif
 } lua_control_block;
 
-PyMODINIT_FUNC init_executor(void);
+PyMODINIT_FUNC PyInit__executor(void);
 
 int install_control_block(lua_State *L, size_t max_memory,
                           PyObject* references);

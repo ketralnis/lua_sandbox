@@ -43,25 +43,26 @@ def only_on_luajit(fn):
 
 class TestLuaExecution(unittest.TestCase):
     def setUp(self, *a, **kw):
-        self.ex = SimpleSandboxedExecutor(name=self.id(),
+        self.ex = SimpleSandboxedExecutor(
+            name=self.id().encode('ascii'),
             max_memory=None)
 
     def test_basics1(self):
-        program = """
+        program = b"""
             return 1
         """
         self.assertEqual(self.ex.execute(program, {}),
                          (1.0,))
 
     def test_basics2(self):
-        program = """
+        program = b"""
             return a, b, a+b
         """
         self.assertEqual(self.ex.execute(program, {'a': 1, 'b': 2}),
                          (1.0, 2.0, 3.0))
 
     def test_basics3(self):
-        program = """
+        program = b"""
             foo = {}
             while #foo < 5 do
                 foo[#foo+1] = #foo+1
@@ -85,14 +86,14 @@ class TestLuaExecution(unittest.TestCase):
             check_stack(0, 0)(_fn)(self.ex.lua)
 
     def test_parse_error(self):
-        program = "()code"
+        program = b"()code"
         with self.assertRaises(LuaSyntaxError):
             self.ex.lua.load(program)
 
     def test_serialize_deserialize(self):
-        program = """
+        program = b"""
             return foo
-        """
+        b"""
         input_data = {
             1: 2,
             2: 3,
@@ -104,12 +105,14 @@ class TestLuaExecution(unittest.TestCase):
             8: '',
             9: True,
             10: False,
-            11: {'a': {1: 2}}
+            11: {'a': {1: 2}},
+            12: u"héllo",
+            13: b"hello",
         }
         expected_output = {
             1.0: 2.0,
             2.0: 3.0,
-            4.0: "abc",
+            4.0: b"abc",
             5.0: {1.0: 'a', 2.0: 'b', 3.0: 'c'},
             5.5: {1.0: 'a', 2.0: 'b', 3.0: 'c'},
             6.0: 6.5,
@@ -117,7 +120,9 @@ class TestLuaExecution(unittest.TestCase):
             8.0: '',
             9.0: True,
             10.0: False,
-            11.0: {'a': {1.0: 2.0}}
+            11.0: {'a': {1.0: 2.0}},
+            12: u"héllo".encode('utf8'),
+            13: b"hello",
             }
 
         self.assertEqual(self.ex.execute(program,
@@ -125,7 +130,7 @@ class TestLuaExecution(unittest.TestCase):
                          (expected_output,))
 
     def test_serialize_unicode(self):
-        program = """
+        program = b"""
             return data
         """
 
@@ -136,10 +141,10 @@ class TestLuaExecution(unittest.TestCase):
 
         self.assertEqual(self.ex.execute(program,
                                    {'data': input_data}),
-                         ({english: chinese.encode('utf8')},))
+                         ({english.encode('ascii'): chinese.encode('utf8')},))
 
     def test_no_weird_python_types(self):
-        program = """
+        program = b"""
             return foo
         """
 
@@ -153,7 +158,7 @@ class TestLuaExecution(unittest.TestCase):
             self.ex.execute(program, {'foo': d})
 
     def test_capsule_return(self):
-        program = """
+        program = b"""
             return capsule
         """
 
@@ -163,7 +168,7 @@ class TestLuaExecution(unittest.TestCase):
         self.assertIs(obj, ret[0])
 
     def test_capsule_caches(self):
-        program = """
+        program = b"""
             first_time = capsule.property
             update_value()
             second_time = capsule.property
@@ -180,7 +185,7 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEquals(ret, ('foo', 'foo'))
 
     def test_capsule_no_caches(self):
-        program = """
+        program = b"""
             first_time = capsule.property
             update_value()
             second_time = capsule.property
@@ -206,7 +211,7 @@ class TestLuaExecution(unittest.TestCase):
             success.append(cap)
             return Capsule(cap)
 
-        program = """
+        program = b"""
             return foo(capsule)
         """
 
@@ -218,7 +223,7 @@ class TestLuaExecution(unittest.TestCase):
     def test_capsule_index(self):
         data = {'foo': 5, 'bar': {'baz': 10}, 'str1': 'str2'}
 
-        program = """
+        program = b"""
             return data.foo, data.bar.baz, data.str1, data.notthere
         """
 
@@ -226,12 +231,12 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(ret, (5.0, 10.0, 'str2', None))
 
     def test_capsule_none(self):
-        program = "return data"
+        program = b"return data"
         ret = self.ex.execute(program, {'data': Capsule(None)})
         self.assertEqual(ret, (None,))
 
     def test_capsule_lazy(self):
-        loaded = self.ex.lua.sandboxed_load("""
+        loaded = self.ex.lua.sandboxed_load(b"""
             return data.more_data
         """)
 
@@ -247,7 +252,7 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual(result, ["string",])
 
     def test_function_noargs(self):
-        program = """
+        program = b"""
             return foo()
         """
         ret = self.ex.execute(program, {'foo': lambda: 5})
@@ -261,7 +266,7 @@ class TestLuaExecution(unittest.TestCase):
             closed.append(argument2)
             return argument1 ** argument2, argument2 ** argument1
 
-        program = """
+        program = b"""
             a = 1+3
             return foo(2, 3)
         """
@@ -271,7 +276,7 @@ class TestLuaExecution(unittest.TestCase):
         self.assertEqual([2.0, 3.0], closed)
 
     def test_function_args(self):
-        program = """
+        program = b"""
         local function multiplier(a, b)
             return a*b
         end
@@ -287,52 +292,52 @@ class TestLuaExecution(unittest.TestCase):
             def double(self, x):
                 return x*2
 
-        program = """
+        program = b"""
             return doubler(4)
         """
         ret = self.ex.execute(program, {'doubler': MyObject().double})
         self.assertEqual((8.0,), ret)
 
     def test_regular_exception(self):
-        program = """
+        program = b"""
             error("I'm an error!")
         """
         try:
             self.ex.execute(program)
         except LuaException as e:
-            self.assertEqual(str(e), 'LuaStateException(\'[string "Lua"]:2: I\\\'m an error!\')')
+            self.assertEqual(str(e), 'LuaStateException(b\'[string "Lua"]:2: I\\\'m an error!\')')
         else:
             self.assertTrue(False)
 
     def test_number_exception(self):
-        program = """
+        program = b"""
             error(3.14159)
         """
         try:
             self.ex.execute(program)
         except LuaException as e:
-            self.assertEqual(str(e), 'LuaStateException(\'[string "Lua"]:2: 3.14159\')')
+            self.assertEqual(str(e), 'LuaStateException(b\'[string "Lua"]:2: 3.14159\')')
             # lua doesn't thread the original number back, it coerces to a
             # string
-            self.assertEqual(e.lua_value.to_python(), '[string "Lua"]:2: 3.14159')
+            self.assertEqual(e.lua_value.to_python(), b'[string "Lua"]:2: 3.14159')
         else:
             self.assertTrue(False)
 
     def test_table_exception(self):
-        program = """
+        program = b"""
             error({['whole message']= 'this is my message'})
         """
         try:
             self.ex.execute(program)
         except LuaException as e:
             self.assertEqual(e.lua_value.to_python(), {
-                'whole message': 'this is my message',
+                b'whole message': b'this is my message',
             })
         else:
             self.assertTrue(False)
 
     def test_pyfunction_exception(self):
-        program = """
+        program = b"""
             return foo("hello")
         """
         class MyException(Exception): pass
@@ -350,7 +355,7 @@ class TestLuaExecution(unittest.TestCase):
 
     def test_pyobject_exception(self):
         obj = object()
-        program = """
+        program = b"""
             error(foo)
         """
 
@@ -362,28 +367,28 @@ class TestLuaExecution(unittest.TestCase):
             self.assertTrue(False)
 
     def test_assertions(self):
-        program = """
+        program = b"""
             assert(false)
         """
         with self.assertRaises(LuaException):
             self.ex.execute(program)
 
-        program = """
+        program = b"""
             error("nuh uh")
         """
         with self.assertRaises(LuaException):
             self.ex.execute(program)
 
     def test_setitem(self):
-        program = "return x"
+        program = b"return x"
 
         # round trip
-        self.ex.lua['x'] = 5
-        self.assertEqual(self.ex.lua['x'].to_python(), 5.0)
+        self.ex.lua[b'x'] = 5
+        self.assertEqual(self.ex.lua[b'x'].to_python(), 5.0)
 
         # nils
-        self.assertEqual(self.ex.lua['bar'].type_name(), 'nil')
-        self.assertEqual(self.ex.lua['bar'].to_python(), None)
+        self.assertEqual(self.ex.lua[b'bar'].type_name(), b'nil')
+        self.assertEqual(self.ex.lua[b'bar'].to_python(), None)
 
         # loaded code can get to it
         loaded = self.ex.lua.load(program)
@@ -394,7 +399,7 @@ class TestLuaExecution(unittest.TestCase):
         t = self.ex.lua.create_table()
         t['foo'] = 5
         self.assertEquals(t['foo'].to_python(), 5.0)
-        self.assertEquals(t['bar'].type_name(), 'nil')
+        self.assertEquals(t['bar'].type_name(), b'nil')
         self.assertEquals(t['bar'].to_python(), None)
         self.assertTrue(t['bar'].is_nil())
 
@@ -411,9 +416,9 @@ class TestLuaExecution(unittest.TestCase):
         loaded = self.ex.lua.load(s)
         lua_string, = loaded()
         with lua_string.as_buffer() as buff:
-            self.assertEqual(re.search('my (string.*)', buff).groups(),
-                             ('string',))
-            self.assertEqual(len(buff), len('this is my string'))
+            self.assertEqual(re.search(b'my (string.*)', buff).groups(),
+                             (b'string',))
+            self.assertEqual(len(buff), len(b'this is my string'))
 
         # this is the regular callback way with lots of copies, here mostly for
         # demonstration
@@ -421,7 +426,7 @@ class TestLuaExecution(unittest.TestCase):
             result = re.search(pat, x)
             if result:
                 return result.groups()
-        ret = self.ex.execute(""" return re.search("(string)", str)[1] """,
+        ret = self.ex.execute(b""" return re.search("(string)", str)[1] """,
                               {
                                   're': {'search': slow_search},
                                    'str': 'this is my string'
@@ -437,7 +442,7 @@ class TestLuaExecution(unittest.TestCase):
             if result:
                 # this does still copy if there is a match
                 return result.groups()
-        ret = self.ex.execute(""" return re.search("(string)", str)[1] """,
+        ret = self.ex.execute(b""" return re.search("(string)", str)[1] """,
                               {
                                   're': {
                                     'search': Capsule(fast_search,
@@ -450,7 +455,7 @@ class TestLuaExecution(unittest.TestCase):
 
 class TestSafeguards(TestLuaExecution):
     def setUp(self, *a, **kw):
-        self.ex = SimpleSandboxedExecutor(name=self.id(),
+        self.ex = SimpleSandboxedExecutor(name=self.id().encode('ascii'),
             max_memory=5*1024*1024)
 
     def test_memory(self):
@@ -460,7 +465,7 @@ class TestSafeguards(TestLuaExecution):
                 self.ex.execute(program)
             self.assertLess(time.time()-start_time, 1.1)
 
-        _tester("""
+        _tester(b"""
             foo = {}
             while #foo < 500000000 do
                 foo[#foo+1] = 1
@@ -469,7 +474,7 @@ class TestSafeguards(TestLuaExecution):
         """)
 
     def test_memory_used(self):
-        self.ex.lua['some_var'] = '*'*(1024*1024)
+        self.ex.lua[b'some_var'] = '*'*(1024*1024)
         self.assertGreater(self.ex.lua.memory_used, 1024*1024)
 
     def test_timeout(self):
@@ -480,7 +485,7 @@ class TestSafeguards(TestLuaExecution):
                     self.ex.execute(program)
             self.assertLess(time.time()-start_time, 0.7)
 
-        _tester("""
+        _tester(b"""
             foo = {}
             while true do
             end
@@ -489,11 +494,11 @@ class TestSafeguards(TestLuaExecution):
 
         with self.ex.lua.limit_runtime(1.0, disable_jit=True):
             # make sure the limiter doesn't just always trigger
-            self.ex.execute("return 5")
+            self.ex.execute(b"return 5")
 
     def test_no_print(self):
         # make sure we didn't pass any libraries to the client program
-        program = """
+        program = b"""
             print(foo)
             return 0
         """
@@ -504,7 +509,7 @@ class TestSafeguards(TestLuaExecution):
     def test_no_patterns(self):
         # there are some lua pattern operations you can do that are super slow,
         # so we block them entirely in the SimpleSandboxingExecutor
-        program = """
+        program = b"""
             return string.find(("a"):rep(1e4), ".-.-.-.-b$")
         """
 
@@ -516,7 +521,7 @@ class TestSafeguards(TestLuaExecution):
 
     def test_have_good_libs(self):
         # make sure we did pass the libraries that are okay
-        program = """
+        program = b"""
             math.abs(-1)
             table.sort({})
             return foo

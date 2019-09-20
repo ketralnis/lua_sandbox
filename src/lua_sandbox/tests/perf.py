@@ -39,7 +39,7 @@ def simple_test(times):
             lua.sandbox['thing'] = None
 
     ti = timeit.Timer(the_test)
-    print 'simple_test', ti.timeit(number=times)
+    print('simple_test', ti.timeit(number=times))
 
 
 def limiter_test(times):
@@ -68,7 +68,7 @@ def limiter_test(times):
             lua.sandbox['thing'] = None
 
     ti = timeit.Timer(the_test)
-    print 'limiter_test', ti.timeit(number=times)
+    print('limiter_test', ti.timeit(number=times))
 
 
 def re_test(times):
@@ -95,7 +95,7 @@ def re_test(times):
             lua.sandbox['thing'] = None
 
     ti = timeit.Timer(the_test)
-    print 're_test', ti.timeit(number=times)
+    print('re_test', ti.timeit(number=times))
 
 
 def capsule_test(times):
@@ -122,7 +122,7 @@ def capsule_test(times):
             lua.sandbox['thing'] = None
 
     ti = timeit.Timer(the_test)
-    print 'capsule_test', ti.timeit(number=times)
+    print('capsule_test', ti.timeit(number=times))
 
 
 def main(times=100000):

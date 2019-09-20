@@ -7,5 +7,5 @@ def dataloc(name):
 
 def datafile(name, filecache={}):
     if name not in filecache:
-        filecache[name] = open(dataloc(name)).read()
+        filecache[name] = open(dataloc(name), 'rb').read()
     return filecache[name]
